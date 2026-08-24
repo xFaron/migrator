@@ -3,31 +3,17 @@ import os
 import re
 
 import psycopg
-import requests
 from dotenv import load_dotenv
+from llm_tools import *
 
 load_dotenv()
 
-API_KEY = os.getenv("LLM_API_KEY")
-API_URL = os.getenv("API_URL")
+N = 1
+
 DB_URL = os.getenv("DATABASE_URL")
-MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
-
 PROMPT_TEMPLATE_PATH = "generate_db_prompt.md"
-
-OUTPUT_DIR = "output"
-GENERATED_DB_OUTPUT_PATH = os.path.join(OUTPUT_DIR, "generated_db.json")
-
-if not all([API_KEY, API_URL, DB_URL]):
-  raise RuntimeError(
-    "Missing one or more required environment variables: OPENROUTER_API_KEY, OPENROUTER_URL, DATABASE_URL"
-  )
-
-HEADERS = {
-  "Authorization": f"Bearer {API_KEY}",
-  "Content-Type": "application/json",
-}
-
+OUTPUT_DIR = "test_db"
+GENERATED_DB_OUTPUT_PATH = os.path.join(OUTPUT_DIR, f"generated_db_{N}.json")
 SCHEMA_QUERY = """
 WITH columns AS (
     SELECT
@@ -89,6 +75,8 @@ FROM (
 ) tables;
 """
 
+if not DB_URL:
+  raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
 def fetch_schema(db_url: str) -> dict:
   with psycopg.connect(db_url) as conn:
@@ -97,26 +85,10 @@ def fetch_schema(db_url: str) -> dict:
       (schema,) = cur.fetchone()
       return schema
 
-
-def build_prompt(template_path: str, example_output_1_path: str, schema: dict) -> str:
+def build_prompt(template_path: str, schema: dict) -> str:
   with open(template_path) as f:
     template = f.read()
   return template.replace("{DB_SCHEMA}", json.dumps(schema, indent=2))
-
-
-def query_model(prompt: str) -> dict:
-  resp = requests.post(
-    API_URL,
-    headers=HEADERS,
-    json={
-      "model": MODEL,
-      "messages": [{"role": "user", "content": prompt}],
-      "reasoning": {"enabled": False},
-    },
-  )
-  resp.raise_for_status()
-  return (resp.json())["choices"][0]["message"]
-
 
 def extract_json(content: str) -> dict:
   fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
@@ -130,10 +102,15 @@ def main() -> None:
   print("Fetching source schema...")
   schema = fetch_schema(DB_URL)
 
-  prompt = build_prompt(PROMPT_TEMPLATE_PATH, PROMPT_EXAMPLE_OUTPUT, schema)
+  prompt = build_prompt(PROMPT_TEMPLATE_PATH, schema)
 
   print("Querying model to design target database...")
-  message = query_model(prompt)
+  try:
+    message = query_model(prompt)
+  except e:
+    print(e.message)
+    return
+    
   content = message.get("content", "")
 
   print("Parsing model output...")
@@ -152,7 +129,6 @@ def main() -> None:
     json.dump(generated_db, f, indent=2)
 
   print("Done.")
-
 
 if __name__ == "__main__":
   main()

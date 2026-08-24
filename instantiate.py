@@ -1,6 +1,6 @@
 """
 Usage:
-    python validate_instantiate.py [generated_db.json] [queries.json]
+    python3 validate_instantiate.py [generated_db.json] [queries.json]
 """
 
 import json
@@ -10,22 +10,21 @@ import sys
 import psycopg
 from dotenv import load_dotenv
 
+if len(sys.argv) != 3:
+  print("Usage: python3 validate_instantiate.py [generated_db.json] [queries.json]")
+
 load_dotenv()
 
 DB_URL = os.getenv("DATABASE_URL")
-SCHEMA_NAME = "test1"
-
-GENERATED_DB_PATH = sys.argv[1] if len(sys.argv) > 1 else "output/generated_db.json"
-QUERIES_PATH = sys.argv[2] if len(sys.argv) > 2 else "output/queries.json"
+SCHEMA_NAME = "query_migr_generated"
+GENERATED_DB_PATH = sys.argv[1]
+QUERIES_PATH = sys.argv[2]
 
 if not DB_URL:
   raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
-
 def split_statements(sql: str) -> list[str]:
-  """Naive split on ';' -- fine for straightforward CREATE TABLE DDL."""
   return [s.strip() for s in sql.split(";") if s.strip()]
-
 
 def main() -> None:
   generated_db = json.load(open(GENERATED_DB_PATH))
@@ -38,7 +37,7 @@ def main() -> None:
         print(f"Resetting schema {SCHEMA_NAME!r}...")
         cur.execute(f"DROP SCHEMA IF EXISTS {SCHEMA_NAME} CASCADE;")
         cur.execute(f"CREATE SCHEMA {SCHEMA_NAME};")
-        cur.execute(f"SET search_path TO {SCHEMA_NAME}, public;")
+        cur.execute(f"SET search_path TO {SCHEMA_NAME};")
 
         print("Creating tables...")
         for stmt in split_statements(generated_db["target_database_schema"]):

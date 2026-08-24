@@ -3,33 +3,22 @@ import json
 import os
 import re
 
-import requests
 from dotenv import load_dotenv
+from llm_tools import *
 
 load_dotenv()
 
-API_KEY = os.getenv("LLM_API_KEY")
-API_URL = os.getenv("API_URL")
-MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+N = 1
 
 PROMPT_QUERY_GEN = "generate_query_prompt.md"
-
-OUTPUT_DIR = "output"
-GENERATED_DB_INPUT_PATH = os.path.join(OUTPUT_DIR, "generated_db.json")
+OUTPUT_DIR = "test_db"
+GENERATED_DB_INPUT_PATH = os.path.join(OUTPUT_DIR, f"generated_db_{N}.json")
 QUERIES_OUTPUT_PATH = os.path.join(OUTPUT_DIR, "queries.json")
-
-DEFAULT_K = 20
-
-if not all([API_KEY, API_URL]):
-  raise RuntimeError(
-    "Missing one or more required environment variables: OPENROUTER_API_KEY, OPENROUTER_URL"
-  )
-
+DEFAULT_K = 5
 HEADERS = {
   "Authorization": f"Bearer {API_KEY}",
   "Content-Type": "application/json",
 }
-
 
 def load_target_schema(generated_db_path: str) -> str:
   if not os.path.exists(generated_db_path):
@@ -47,32 +36,15 @@ def load_target_schema(generated_db_path: str) -> str:
     )
   return schema
 
-
 def build_prompt(template_path: str, db_schema: str, k: int) -> str:
   with open(template_path) as f:
     template = f.read()
   return template.replace("{DB_SCHEMA}", db_schema).replace("{K}", str(k))
 
-
-def query_model(prompt: str) -> dict:
-  resp = requests.post(
-    API_URL,
-    headers=HEADERS,
-    json={
-      "model": MODEL,
-      "messages": [{"role": "user", "content": prompt}],
-      "reasoning": {"enabled": False},
-    },
-  )
-  resp.raise_for_status()
-  return (resp.json())["choices"][0]["message"]
-
-
 def extract_json(content: str) -> dict:
   fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
   raw = fenced.group(1) if fenced else content
   return json.loads(raw, strict=False)
-
 
 def main() -> None:  
   os.makedirs(os.path.dirname(OUTPUT_DIR) or ".", exist_ok=True)
@@ -83,7 +55,12 @@ def main() -> None:
   prompt = build_prompt(PROMPT_QUERY_GEN, db_schema, DEFAULT_K)
 
   print(f"Querying model for {DEFAULT_K} queries...")
-  message = query_model(prompt)
+  try:
+    message = query_model(prompt)
+  except e:
+    print(e.message)
+    return
+    
   content = message.get("content", "")
 
   print("Parsing model output...")

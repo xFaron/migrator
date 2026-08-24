@@ -3,3 +3,4 @@ TPC-H V3.0.1
 .env
 *.zip
 TODO.md
+__pycache__
