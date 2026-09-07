@@ -1,89 +1,26 @@
+import argparse
 import json
 import os
 import re
+import sqlglot as exp
 
 import psycopg
 from dotenv import load_dotenv
+from db_tools import fetch_schema_json, fetch_schema_json_cur
 from llm_tools import *
 
 load_dotenv()
 
-N = 1
-
 DB_URL = os.getenv("DATABASE_URL")
-PROMPT_TEMPLATE_PATH = "generate_db_prompt.md"
-OUTPUT_DIR = "test_db"
-GENERATED_DB_OUTPUT_PATH = os.path.join(OUTPUT_DIR, f"generated_db_{N}.json")
-SCHEMA_QUERY = """
-WITH columns AS (
-    SELECT
-        n.nspname AS schema_name,
-        c.relname AS table_name,
-        c.oid AS table_oid,
-        a.attnum,
-        a.attname AS column_name,
-        pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
-        NOT a.attnotnull AS nullable,
-        a.attidentity AS identity_type,
-        EXISTS (
-            SELECT 1
-            FROM pg_catalog.pg_index i
-            WHERE i.indrelid = c.oid
-              AND i.indisprimary
-              AND a.attnum = ANY(i.indkey)
-        ) AS primary_key
-    FROM pg_catalog.pg_class c
-    JOIN pg_catalog.pg_namespace n
-        ON n.oid = c.relnamespace
-    JOIN pg_catalog.pg_attribute a
-        ON a.attrelid = c.oid
-    WHERE c.relkind = 'r'
-      AND a.attnum > 0
-      AND NOT a.attisdropped
-      AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-)
-SELECT jsonb_build_object(
-    'tables',
-    COALESCE(
-        jsonb_agg(
-            jsonb_build_object(
-                'schema', schema_name,
-                'name', table_name,
-                'columns', columns
-            )
-            ORDER BY schema_name, table_name
-        ),
-        '[]'::jsonb
-    )
-) AS database_schema
-FROM (
-    SELECT
-        col.schema_name AS schema_name,
-        col.table_name AS table_name,
-        jsonb_agg(
-            jsonb_build_object(
-                'name', col.column_name,
-                'type', col.data_type,
-                'nullable', col.nullable,
-                'primary_key', col.primary_key,
-                'identity', col.identity_type
-            )
-            ORDER BY col.attnum
-        ) AS columns
-    FROM columns col
-    GROUP BY schema_name, table_name
-) tables;
-"""
+PROMPT_TEMPLATE_PATH = os.getenv("DB_PROMPT_PATH", "generate_db_prompt.md")
+SCHEMA_NAME = os.getenv("GENERATED_SCHEMA", "query_migr_generated")
+SOURCE_SCHEMA = os.getenv("SOURCE_SCHEMA", "public")
 
 if not DB_URL:
   raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
 def fetch_schema(db_url: str) -> dict:
-  with psycopg.connect(db_url) as conn:
-    with conn.cursor() as cur:
-      cur.execute(SCHEMA_QUERY)
-      (schema,) = cur.fetchone()
-      return schema
+  return fetch_schema_json(db_url, SOURCE_SCHEMA)
 
 def build_prompt(template_path: str, schema: dict) -> str:
   with open(template_path) as f:
@@ -95,37 +32,75 @@ def extract_json(content: str) -> dict:
   raw = fenced.group(1) if fenced else content
   return json.loads(raw, strict=False)
 
+# Checks syntactic validity of statements
+def validate_generated_db(generated_db: dict) -> dict:
+  with psycopg.connect(DB_URL) as conn:
+    conn.autocommit = False
+    try:
+      with conn.cursor() as cur:
+        cur.execute(f"DROP SCHEMA IF EXISTS {SCHEMA_NAME} CASCADE;")
+        cur.execute(f"CREATE SCHEMA {SCHEMA_NAME};")
+        cur.execute(f"SET search_path TO {SCHEMA_NAME}, public;")
+
+        # Checking if CREATE/ALTER stmt are valid
+        for stmt in exp.transpile(generated_db["target_database_schema"]):
+          cur.execute(stmt)
+
+        # Checking if insertion select queries are valid
+        for table in generated_db["table_generation_queries"]:
+          cur.execute(
+            f"EXPLAIN INSERT INTO {table["target_table"]} {exp.transpile(table["query"])[0]}"
+          )
+
+        # Getting schema in JSON format for nxt step
+        target_schema_json = fetch_schema_json_cur(cur, SCHEMA_NAME)
+    finally:
+      conn.rollback()
+
+  return target_schema_json
+
 
 def main() -> None:
-  os.makedirs(OUTPUT_DIR, exist_ok=True)
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--db", type=int, default=1, metavar="N")
+  args = parser.parse_args()
 
-  print("Fetching source schema...")
+  output_dir = os.path.join("test_dbs", f"db{args.db}")
+  output_path = os.path.join(output_dir, "db.json")
+
+  os.makedirs(output_dir, exist_ok=True)
+
   schema = fetch_schema(DB_URL)
-
   prompt = build_prompt(PROMPT_TEMPLATE_PATH, schema)
 
-  print("Querying model to design target database...")
-  try:
-    message = query_model(prompt)
-  except e:
-    print(e.message)
-    return
-    
-  content = message.get("content", "")
+  print("Calling LLM...")
+  message = query_model(prompt)
 
-  print("Parsing model output...")
+  content = message.get("content") or ""
+
+  fallback_path = os.path.join(output_dir, "db.raw.txt")
+  error = None
   try:
     generated_db = extract_json(content)
-  except json.JSONDecodeError:
-    fallback_path = os.path.join(OUTPUT_DIR, "generated_db.raw.txt")
-    with open(fallback_path, "w") as f:
-      f.write(content)
+
+    print("Validating...")
+    generated_db["target_database_schema_json"] = validate_generated_db(generated_db)
+  except json.JSONDecodeError as e:
+    error = e
     raise RuntimeError(
       f"Model did not return valid JSON. Raw response saved to {fallback_path!r} for inspection."
     )
-
-  print(f"Writing generated database to {GENERATED_DB_OUTPUT_PATH}...")
-  with open(GENERATED_DB_OUTPUT_PATH, "w") as f:
+  except Exception as e:
+    error = e
+    raise RuntimeError(
+      f"Validation error: Raw response saved to {fallback_path!r} for inspection"
+    )
+  finally:
+    with open(fallback_path, "w") as f:
+      f.write(content)
+      f.write(f"\n\n\nERROR: {error}")
+      
+  with open(output_path, "w") as f:
     json.dump(generated_db, f, indent=2)
 
   print("Done.")

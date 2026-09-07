@@ -1,8 +1,3 @@
-"""
-Usage:
-    python3 validate_instantiate.py [generated_db.json] [queries.json]
-"""
-
 import json
 import os
 import sys
@@ -11,12 +6,12 @@ import psycopg
 from dotenv import load_dotenv
 
 if len(sys.argv) != 3:
-  print("Usage: python3 validate_instantiate.py [generated_db.json] [queries.json]")
+  sys.exit("Usage: python3 instantiate.py <db.json> <queries.json>")
 
 load_dotenv()
 
 DB_URL = os.getenv("DATABASE_URL")
-SCHEMA_NAME = "query_migr_generated"
+SCHEMA_NAME = os.getenv("GENERATED_SCHEMA", "query_migr_generated")
 GENERATED_DB_PATH = sys.argv[1]
 QUERIES_PATH = sys.argv[2]
 
@@ -34,32 +29,47 @@ def main() -> None:
     conn.autocommit = False
     try:
       with conn.cursor() as cur:
-        print(f"Resetting schema {SCHEMA_NAME!r}...")
         cur.execute(f"DROP SCHEMA IF EXISTS {SCHEMA_NAME} CASCADE;")
         cur.execute(f"CREATE SCHEMA {SCHEMA_NAME};")
-        cur.execute(f"SET search_path TO {SCHEMA_NAME};")
+        cur.execute(f"SET search_path TO {SCHEMA_NAME}, public;")
 
-        print("Creating tables...")
         for stmt in split_statements(generated_db["target_database_schema"]):
           cur.execute(stmt)
 
         print("Populating tables...")
         for entry in generated_db["table_generation_queries"]:
-          print(f"  -> {entry['target_table']}")
           cur.execute(f"INSERT INTO {entry['target_table']} {entry['query']}")
+        print("Populated all tables... Verifying queries")
 
-        print("Running validation queries...")
+        # LLM-generated queries can be pathologically expensive (e.g. uncorrelated
+        # nested subqueries with no supporting index); cap runtime so one bad query
+        # can't hang the pipeline indefinitely. Such queries are ignored.
+        cur.execute("SET statement_timeout = '60s'")
+
+        total = len(queries["queries"])
+        kept = []
         for q in queries["queries"]:
-          cur.execute(q["query"])
-          cur.fetchall()
+          try:
+            cur.execute(q["query"])  
+            rows = cur.fetchall()
+            if rows:
+              kept.append(q)
+            else:
+              print(f"Omitting query id={q.get('id', '?')} (zero rows)")
+          except psycopg.errors.QueryCanceled as e:
+            pass
 
       conn.commit()
-      print(f"Success. Committed as schema {SCHEMA_NAME!r}.")
+      print("Done.")
     except Exception as e:
       conn.rollback()
       print(f"FAILED: {e}")
-      print("Rolled back -- nothing was saved.")
       sys.exit(1)
+
+  queries["queries"] = kept
+  with open(QUERIES_PATH, "w") as f:
+    json.dump(queries, f, indent=2)
+  print(f"Kept {len(kept)}/{total} queries.")
 
 
 if __name__ == "__main__":

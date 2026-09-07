@@ -1,6 +1,16 @@
+# Folders
 venv/
-TPC-H V3.0.1
-.env
-*.zip
-TODO.md
+TPC-H V3.0.1/
+test_dbs/
+
+# Private / Cache
 __pycache__
+.env
+.claude
+
+# Big files
+*.zip
+
+# Docs
+TODO.md
+CLAUDE.md
