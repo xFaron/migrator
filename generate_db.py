@@ -94,6 +94,7 @@ def main() -> None:
   error = None
   try:
     generated_db = extract_json(content)
+    generated_db["source_database_schema"] = schema
 
     print("Validating...")
     generated_db = validate_generated_db(generated_db)

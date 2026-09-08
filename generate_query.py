@@ -41,29 +41,30 @@ def extract_json(content: str) -> dict:
 
 # Checks syntactic validity of the generated queries against the instantiated
 # target schema by EXPLAINing each one (no rows are read/written).
-def validate_generated_queries(queries: dict, generate_db: dict) -> dict:
+def validate_generated_queries(queries: dict, generated_db: dict) -> dict:
   new_queries = {}
   new_queries["queries"] = []
   
   with psycopg.connect(DB_URL) as conn:
     conn.autocommit = False
     try:
-      with conn.cursor() as cur:        
-        cur.execute(f"DROP SCHEMA IF EXISTS {SCHEMA_NAME} CASCADE;")
-        cur.execute(f"CREATE SCHEMA {SCHEMA_NAME};")
-        cur.execute(f"SET search_path TO {SCHEMA_NAME}, public;")
+      with conn.cursor() as cur:
+        cur.execute(f"DROP SCHEMA IF EXISTS {GENERATED_SCHEMA} CASCADE;")
+        cur.execute(f"CREATE SCHEMA {GENERATED_SCHEMA};")
+        cur.execute(f"SET search_path TO {GENERATED_SCHEMA}, public;")
 
         # Checking if CREATE/ALTER stmt are valid
-        for stmt in exp.transpile(generated_db["target_database_schema"]):
+        for stmt in exp.transpile(generated_db["target_database_schema"], read="postgres"):
           cur.execute(stmt)
 
         for q in queries["queries"]:
           try:
             stmt = exp.transpile(q["query"], read="postgres")[0]
             cur.execute(f"EXPLAIN {stmt}")
-            new_queries.append(q)
+            new_queries["queries"].append(q)
           except Exception as e:
-            printf(f"qid = {q["id"]} is syntactically invalid: {e}")
+            print(f"qid = {q.get('id', '?')} is syntactically invalid: {e}")
+            new_queries["queries"].append({**q, "error": f"Syntactically invalid: {e}"})
     finally:
       conn.rollback()
 
@@ -80,7 +81,7 @@ def main() -> None:
   queries_path = os.path.join(output_dir, "queries.json")
 
   generated_db = load_generated_db(db_path)
-  db_schema = "\n\n".join(exp.transpile(generated_db["target_database_schema"]))
+  db_schema = generated_db["target_database_schema"]
   prompt = build_prompt(PROMPT_QUERY_GEN, db_schema, args.k)
 
   print("Calling LLM...")
@@ -107,7 +108,7 @@ def main() -> None:
   finally:
     with open(fallback_path, "w") as f:
       f.write(content)
-      f.write(f"\n\n\nERROR: {e}")
+      f.write(f"\n\n\nERROR: {error}")
 
   with open(queries_path, "w") as f:
     json.dump(queries, f, indent=2)

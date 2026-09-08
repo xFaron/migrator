@@ -49,15 +49,27 @@ def main() -> None:
         total = len(queries["queries"])
         kept = []
         for q in queries["queries"]:
+          if "error" in q:
+            print(f"Skipping query id={q.get('id', '?')} (already has error): {q['error']}")
+            kept.append(q)
+            continue
+
+          # A savepoint lets us recover from a per-query failure (e.g. a
+          # statement_timeout cancellation) without poisoning the whole
+          # transaction, since Postgres otherwise aborts it entirely until
+          # a ROLLBACK is issued.
+          cur.execute("SAVEPOINT query_check")
           try:
-            cur.execute(q["query"])  
+            cur.execute(q["query"])
             rows = cur.fetchall()
             if rows:
               kept.append(q)
             else:
               print(f"Omitting query id={q.get('id', '?')} (zero rows)")
-          except psycopg.errors.QueryCanceled as e:
-            pass
+            cur.execute("RELEASE SAVEPOINT query_check")
+          except psycopg.errors.QueryCanceled:
+            print(f"Omitting query id={q.get('id', '?')} (timed out)")
+            cur.execute("ROLLBACK TO SAVEPOINT query_check")
 
       conn.commit()
       print("Done.")

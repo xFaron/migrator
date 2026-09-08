@@ -5,12 +5,25 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 load_dotenv()
 
-def _is_server_error(exception: BaseException) -> bool:
+def _is_retryable_error(exception: BaseException) -> bool:
   return (
     isinstance(exception, requests.exceptions.HTTPError)
     and exception.response is not None
-    and exception.response.status_code >= 500
+    and (exception.response.status_code >= 500 or exception.response.status_code == 429)
   )
+
+# Honors a Retry-After header (seconds, sent by rate-limited APIs like
+# Google's) when present, falling back to the usual exponential backoff.
+def _wait_retry_after_or_exponential(retry_state):
+  exception = retry_state.outcome.exception()
+  if isinstance(exception, requests.exceptions.HTTPError) and exception.response is not None:
+    retry_after = exception.response.headers.get("Retry-After")
+    if retry_after is not None:
+      try:
+        return float(retry_after)
+      except ValueError:
+        pass
+  return wait_exponential(multiplier=1, min=2, max=30)(retry_state)
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_API_URL = os.getenv("OPENROUTER_API_URL")
@@ -30,9 +43,9 @@ GOOGLE_HEADERS = {
 DEFAULT_PROVIDER = "google"
 
 @retry(
-  retry=retry_if_exception(_is_server_error),
-  wait=wait_exponential(multiplier=1, min=2, max=30),
-  stop=stop_after_attempt(5),
+  retry=retry_if_exception(_is_retryable_error),
+  wait=_wait_retry_after_or_exponential,
+  stop=stop_after_attempt(8),
   reraise=True,
 )
 def query_model(prompt: str, reasoning: bool = False, provider: str = DEFAULT_PROVIDER) -> dict:

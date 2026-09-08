@@ -1,10 +1,10 @@
-import json
+import json as _json
 import re
 import subprocess
 import sqlglot as exp
-# import warnings
+import logging
 
-# warnings.filterwarnings("ignore", module="exp")
+logging.getLogger("sqlglot").setLevel(logging.ERROR)
 
 O_LST = 1 # Output list
 O_STR = 0 # Output str
@@ -84,40 +84,49 @@ def get_table_samples(conn, tables: list[str]) -> dict:
   return {"tables": result}
 
 
-# Runs EXPLAIN (FORMAT JSON)
-def get_query_plan(conn_or_cur, query: str) -> str:
+# Runs EXPLAIN (FORMAT JSON), or plain EXPLAIN (text) if json=False, which is
+# more token-efficient for feeding into an LLM prompt.
+def get_query_plan(conn_or_cur, query: str, json: bool = True) -> str:
   if hasattr(conn_or_cur, "cursor"):
     with conn_or_cur.cursor() as cur:
-      return _query_plan_from_cursor(cur, query)
-  return _query_plan_from_cursor(conn_or_cur, query)
+      return _query_plan_from_cursor(cur, query, json)
+  return _query_plan_from_cursor(conn_or_cur, query, json)
 
-def _query_plan_from_cursor(cur, query: str) -> str:
+def _query_plan_from_cursor(cur, query: str, json: bool = True) -> str:
+  if not json:
+    cur.execute(f"EXPLAIN {query}")
+    return "\n".join(row[0] for row in cur.fetchall())
   cur.execute(f"EXPLAIN (FORMAT JSON) {query}")
   plan = cur.fetchone()[0]
-  return json.dumps(plan, indent=2)
+  return _json.dumps(plan, indent=2)
 
 
 # Runs EXPLAIN (ANALYZE, FORMAT JSON): executes the query once and returns the
 # plan dict, which carries both the planner's cost estimate ("Total Cost") and
-# the measured actual runtime ("Execution Time").
-def get_query_plan_analyze(conn_or_cur, query: str) -> dict:
+# the measured actual runtime ("Execution Time"). If json=False, runs plain
+# EXPLAIN ANALYZE (text) instead, returning the raw text output, which is
+# more token-efficient for feeding into an LLM prompt.
+def get_query_plan_analyze(conn_or_cur, query: str, json: bool = True) -> dict | str:
   if hasattr(conn_or_cur, "cursor"):
     with conn_or_cur.cursor() as cur:
-      return _query_plan_analyze_from_cursor(cur, query)
-  return _query_plan_analyze_from_cursor(conn_or_cur, query)
+      return _query_plan_analyze_from_cursor(cur, query, json)
+  return _query_plan_analyze_from_cursor(conn_or_cur, query, json)
 
-def _query_plan_analyze_from_cursor(cur, query: str) -> dict:
+def _query_plan_analyze_from_cursor(cur, query: str, json: bool = True) -> dict | str:
+  if not json:
+    cur.execute(f"EXPLAIN ANALYZE {query}")
+    return "\n".join(row[0] for row in cur.fetchall())
   cur.execute(f"EXPLAIN (ANALYZE, FORMAT JSON) {query}")
   return cur.fetchone()[0][0]
 
 
 # Runs query
-def run_query(conn_or_cur, query: str) -> str:
+def run_query(conn_or_cur, query: str):
   if hasattr(conn_or_cur, "cursor"):
     with conn_or_cur.cursor() as cur:
       return _run_query_from_cursor(cur, query)
   return _run_query_from_cursor(conn_or_cur, query)
 
-def run_query(cur, query: str):
+def _run_query_from_cursor(cur, query: str):
   cur.execute(query)
   return cur.fetchall()
