@@ -16,7 +16,7 @@ Requirements
 - Python3 3.12+
 - Java 17+
 
-Create a `.env` file with your values:
+Copy `.env.example` to `.env` and fill in your values:
 
 ```env
 # LLM provider (defaults to Google; pass provider="openrouter" to query_model() to switch)
