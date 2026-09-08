@@ -16,17 +16,22 @@ Requirements
 - Python3 3.12+
 - Java 17+
 
-Copy `.env.example` to `.env` and fill in your values:
+Create a `.env` file with your values:
 
 ```env
-LLM_API_KEY=""           # API key for the LLM provider
-API_URL=""               # Chat completions endpoint
-DATABASE_URL=""          # PostgreSQL connection string for D' (e.g. the TPC-H database)
+# LLM provider (defaults to Google; pass provider="openrouter" to query_model() to switch)
+OPENROUTER_API_KEY=""    # API key for OpenRouter
+OPENROUTER_API_URL=""    # OpenRouter chat completions endpoint
+OPENROUTER_MODEL=""      # Model identifier (default: nvidia/nemotron-3-ultra-550b-a55b:free)
 
-LLM_MODEL=""             # Model identifier (default: nvidia/nemotron-3-ultra-550b-a55b:free)
+GOOGLE_API_KEY=""        # API key for Google's Generative Language API
+GOOGLE_API_URL=""        # Google API endpoint
+GOOGLE_MODEL=""          # Model identifier (default: models/gemma-4-31b-it)
+
+DATABASE_URL=""          # PostgreSQL connection string for D' (e.g. the TPC-H database)
 GENERATED_SCHEMA=""      # Postgres schema to instantiate D in (default: query_migr_generated)
-DB_PROMPT_PATH=""        # Prompt template for DB generation (default: generate_db_prompt.md)
-QUERY_PROMPT_PATH=""     # Prompt template for query generation (default: generate_query_prompt.md)
+DB_PROMPT_PATH=""        # Prompt template for DB generation (default: prompts/generate_db_prompt.md)
+QUERY_PROMPT_PATH=""     # Prompt template for query generation (default: prompts/generate_query_prompt.md)
 DEFAULT_K=""             # Number of queries to generate (default: 5)
 ```
 
@@ -85,6 +90,23 @@ python generate_raw_queries.py [--db N]
 
 Output: `test_dbs/db<N>/raw_queries.json`
 
+### 5. Evaluate queries — `evaluate_queries.py`
+
+Matches each query in `queries.json` with its counterpart in `raw_queries.json` and, per pair, captures planner
+cost and measured runtime (`EXPLAIN ANALYZE`) plus a correctness rating (via `db_tools/correctness`, backed by
+sqlsolver).
+
+```bash
+python evaluate_queries.py [--db N]
+```
+
+Output: `test_dbs/db<N>/eval_queries.json`
+
+### 6. Generate optimized queries — `generate_optim_queries.py` (WIP)
+
+Baseline for generating an optimized/rewritten version of a query and checking equivalence with the original.
+See `TODO.md` for the broader evaluation plan.
+
 ## Test case layout
 
 ```
@@ -99,5 +121,5 @@ test_dbs/
 
 ## Notes
 
-- Only tested with OpenRouter as the LLM provider.
+- LLM provider prompt templates live under `prompts/`.
 - `instantiate.py` must be run before `generate_raw_queries.py` for a given test case, as the latter runs the original queries against the instantiated schema to verify equivalence.
