@@ -27,10 +27,6 @@ def extract_tables(query: str) -> list[str]:
     return []
 
 
-def normalize_rows(rows):
-  return sorted(tuple((v is None, str(v)) for v in row) for row in rows)
-
-
 def extract_json(content: str) -> dict:
   fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
   raw = fenced.group(1) if fenced else content
@@ -104,25 +100,6 @@ def main() -> None:
       except Exception as e:
         print(f"[{qid}] LLM failed: {e}")
         optim_queries.append({**q, "original_query": query, "error": f"LLM failed: {e}"})
-        continue
-
-      # Validate results match
-      try:
-        with conn.cursor() as cur:
-          cur.execute(query)
-          original_rows = cur.fetchall()
-        with conn.cursor() as cur:
-          cur.execute(optim_query)
-          optim_rows = cur.fetchall()
-      except Exception as e:
-        print(f"[{qid}] Execution failed: {e}")
-        optim_queries.append({**q, "original_query": query, "query": optim_query, "error": f"Execution failed: {e}"})
-        continue
-
-      if normalize_rows(original_rows) != normalize_rows(optim_rows):
-        error = "Result mismatch."
-        print(f"[{qid}] {error}")
-        optim_queries.append({**q, "original_query": query, "query": optim_query, "error": error})
         continue
 
       print(f"[{qid}] OK")

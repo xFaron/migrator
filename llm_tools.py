@@ -1,8 +1,16 @@
 import requests
 import os
 from dotenv import load_dotenv
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 load_dotenv()
+
+def _is_server_error(exception: BaseException) -> bool:
+  return (
+    isinstance(exception, requests.exceptions.HTTPError)
+    and exception.response is not None
+    and exception.response.status_code >= 500
+  )
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_API_URL = os.getenv("OPENROUTER_API_URL")
@@ -14,22 +22,40 @@ OPENROUTER_HEADERS = {
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_API_URL = os.getenv("GOOGLE_API_URL", "https://generativelanguage.googleapis.com/v1beta/interactions")
-GOOGLE_MODEL = os.getenv("GOOGLE_MODEL", "gemma-4-27b-it")
+GOOGLE_MODEL = os.getenv("GOOGLE_MODEL", "models/gemma-4-31b-it")
 GOOGLE_HEADERS = {
-  "x-goog-api-key": GOOGLE_API_KEY,
   "Content-Type": "application/json",
-  "Api-Revision": "2026-05-20",
 }
 
-DEFAULT_PROVIDER = "openrouter"
+DEFAULT_PROVIDER = "google"
 
+@retry(
+  retry=retry_if_exception(_is_server_error),
+  wait=wait_exponential(multiplier=1, min=2, max=30),
+  stop=stop_after_attempt(5),
+  reraise=True,
+)
 def query_model(prompt: str, reasoning: bool = False, provider: str = DEFAULT_PROVIDER) -> dict:
   if provider == "google":
     body = {
       "model": GOOGLE_MODEL,
       "input": prompt,
+      "tools": [],
+      "generation_config": {
+        "temperature": 1,
+        "max_output_tokens": 65536,
+        "top_p": 0.95,
+        "thinking_level": "high" if reasoning else "minimal",
+      },
     }
-    resp = requests.post(GOOGLE_API_URL, headers=GOOGLE_HEADERS, json=body)
+    resp = requests.post(
+      f"{GOOGLE_API_URL}?key={GOOGLE_API_KEY}",
+      headers=GOOGLE_HEADERS,
+      json=body,
+    )
+    print("STATUS:", resp.status_code)
+    # print("RESPONSE:", resp.text)
+
     resp.raise_for_status()
     try:
       data = resp.json()
@@ -50,7 +76,12 @@ def query_model(prompt: str, reasoning: bool = False, provider: str = DEFAULT_PR
     if reasoning:
       body["reasoning"] = {"enabled": True}
     resp = requests.post(OPENROUTER_API_URL, headers=OPENROUTER_HEADERS, json=body)
+
+    print("STATUS:", resp.status_code)
+    print("RESPONSE:", resp.text)
+
     resp.raise_for_status()
+    
     try:
       return (resp.json())["choices"][0]["message"]
     except Exception:

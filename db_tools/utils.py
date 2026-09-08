@@ -2,6 +2,9 @@ import json
 import re
 import subprocess
 import sqlglot as exp
+# import warnings
+
+# warnings.filterwarnings("ignore", module="exp")
 
 O_LST = 1 # Output list
 O_STR = 0 # Output str

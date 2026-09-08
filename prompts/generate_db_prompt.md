@@ -82,6 +82,9 @@ The target schema should explicitly define:
 Use valid PostgreSQL SQL.
 **Note** : When generating Primary key or Foreign key constraints, define them using the `ALTER TABLE` command.
 **Note** : When generating Foriegn key constraints, make sure that the foriegn key and the referenced key have the same type, and the referenced key is indeed a primary key.
+**Note** : DO NOT USE `schema_name.table_name` format for the CREATE and SELECT queries. ONLY USE `table_name` in the queries, and the `schema` will be decided by the user.
+**Note** : PostgreSQL: `DATE - DATE` returns the number of days as an integer; do not use `EXTRACT(DAY FROM ...)` on DATE differences.
+
 
 ## Table Generation Queries
 
