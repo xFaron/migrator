@@ -97,6 +97,20 @@ def _query_plan_from_cursor(cur, query: str) -> str:
   return json.dumps(plan, indent=2)
 
 
+# Runs EXPLAIN (ANALYZE, FORMAT JSON): executes the query once and returns the
+# plan dict, which carries both the planner's cost estimate ("Total Cost") and
+# the measured actual runtime ("Execution Time").
+def get_query_plan_analyze(conn_or_cur, query: str) -> dict:
+  if hasattr(conn_or_cur, "cursor"):
+    with conn_or_cur.cursor() as cur:
+      return _query_plan_analyze_from_cursor(cur, query)
+  return _query_plan_analyze_from_cursor(conn_or_cur, query)
+
+def _query_plan_analyze_from_cursor(cur, query: str) -> dict:
+  cur.execute(f"EXPLAIN (ANALYZE, FORMAT JSON) {query}")
+  return cur.fetchone()[0][0]
+
+
 # Runs query
 def run_query(conn_or_cur, query: str) -> str:
   if hasattr(conn_or_cur, "cursor"):
