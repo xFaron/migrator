@@ -12,6 +12,10 @@ Result(q, D) = Result(q', D')
 
 ## Setup
 
+Requirements
+- Python3 3.12+
+- Java 17+
+
 Copy `.env.example` to `.env` and fill in your values:
 
 ```env

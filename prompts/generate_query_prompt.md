@@ -1,4 +1,4 @@
-You will be given the schema of a relational database and an integer K.
+You will be given the schema of a relational database (as PostgreSQL DDL produced by `pg_dump --schema-only`) and an integer K.
 
 Your task is to generate exactly **K** valid, diverse SQL queries that can be executed against this schema.
 
@@ -30,41 +30,34 @@ The array must contain exactly K entries. Write each query as a single-line stri
 
 ## Example
 
-**Schema:**
+**Schema** (as produced by `pg_dump --schema-only`):
 
-```json
-{
-  "tables": [
-    {
-      "schema": "public",
-      "name": "nation",
-      "columns": [
-        { "name": "n_nationkey", "type": "integer", "nullable": false, "primary_key": true, "identity": "d" },
-        { "name": "n_name", "type": "character(25)", "nullable": true, "primary_key": false, "identity": "" }
-      ]
-    },
-    {
-      "schema": "public",
-      "name": "customer",
-      "columns": [
-        { "name": "c_custkey", "type": "integer", "nullable": false, "primary_key": true, "identity": "d" },
-        { "name": "c_name", "type": "character varying(25)", "nullable": true, "primary_key": false, "identity": "" },
-        { "name": "c_nationkey", "type": "integer", "nullable": true, "primary_key": false, "identity": "" },
-        { "name": "c_acctbal", "type": "numeric", "nullable": true, "primary_key": false, "identity": "" }
-      ]
-    },
-    {
-      "schema": "public",
-      "name": "orders",
-      "columns": [
-        { "name": "o_orderkey", "type": "integer", "nullable": false, "primary_key": true, "identity": "d" },
-        { "name": "o_custkey", "type": "integer", "nullable": true, "primary_key": false, "identity": "" },
-        { "name": "o_orderdate", "type": "date", "nullable": true, "primary_key": false, "identity": "" },
-        { "name": "o_totalprice", "type": "numeric", "nullable": true, "primary_key": false, "identity": "" }
-      ]
-    }
-  ]
-}
+```sql
+CREATE TABLE public.nation (
+    n_nationkey integer NOT NULL,
+    n_name character(25),
+    PRIMARY KEY (n_nationkey)
+);
+
+CREATE TABLE public.customer (
+    c_custkey integer NOT NULL,
+    c_name character varying(25),
+    c_nationkey integer,
+    c_acctbal numeric,
+    PRIMARY KEY (c_custkey)
+);
+ALTER TABLE ONLY public.customer
+    ADD CONSTRAINT customer_c_nationkey_fkey FOREIGN KEY (c_nationkey) REFERENCES public.nation(n_nationkey);
+
+CREATE TABLE public.orders (
+    o_orderkey integer NOT NULL,
+    o_custkey integer,
+    o_orderdate date,
+    o_totalprice numeric,
+    PRIMARY KEY (o_orderkey)
+);
+ALTER TABLE ONLY public.orders
+    ADD CONSTRAINT orders_o_custkey_fkey FOREIGN KEY (o_custkey) REFERENCES public.customer(c_custkey);
 ```
 
 **K = 2**
@@ -90,7 +83,7 @@ The array must contain exactly K entries. Write each query as a single-line stri
 
 ## Database Schema
 
-```json
+```sql
 {DB_SCHEMA}
 ```
 

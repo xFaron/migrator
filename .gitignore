@@ -2,6 +2,7 @@
 venv/
 TPC-H V3.0.1/
 test_dbs/
+SQLSolver_artifacts/
 
 # Private / Cache
 __pycache__

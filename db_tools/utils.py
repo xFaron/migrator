@@ -1,73 +1,66 @@
 import json
-import os
+import re
+import subprocess
+import sqlglot as exp
 
-import psycopg
+O_LST = 1 # Output list
+O_STR = 0 # Output str
 
-SCHEMA_QUERY_PATH = os.path.join(os.path.dirname(__file__), "schema_query.sql")
+def fetch_schema_ddl(db_url: str, schema_name: str, tables: list[str] | None = None, flags: int = O_STR) -> str:
+  """Dump a Postgres schema's DDL (CREATE TABLE/constraint/index statements) via
+  `pg_dump --schema-only`, optionally restricted to a subset of tables.
 
-def _load_schema_query() -> str:
-  with open(SCHEMA_QUERY_PATH) as f:
-    return f.read().replace("$1", "%(schema)s")
+  This is the canonical way to describe a schema to an LLM prompt: it reflects
+  exactly what Postgres will create, with none of the drift or omissions a
+  hand-rolled information_schema/pg_catalog query can introduce.
+  """
+  cmd = [
+    "pg_dump", db_url,
+    "--schema-only",
+    "--no-owner",
+    "--no-privileges",
+    "--no-comments",
+    "--no-tablespaces",
+    "-n", schema_name,
+  ]
+  for table in tables or []:
+    cmd += ["-t", f"{schema_name}.{table}"]
+
+  result = subprocess.run(cmd, capture_output=True, text=True)
+  if result.returncode != 0:
+    raise RuntimeError(f"pg_dump failed for schema {schema_name!r}: {result.stderr.strip()}")
+
+  output = _clean_pg_dump_output(result.stdout)
+  if flags == O_LST:
+    return output
+  elif flags == O_STR:
+    return "\n\n".join(output)
 
 
-def fetch_schema_json_cur(cur, schema_name: str) -> dict:
-  """Introspect a Postgres schema using an already-open cursor and return its
-  tables/columns/constraints as JSON. Useful for introspecting a schema that
-  only exists inside an uncommitted transaction on that same cursor."""
-  query = _load_schema_query()
-  cur.execute(query, {"schema": schema_name})
-  (schema,) = cur.fetchone()
-  return schema
+def _clean_pg_dump_output(dump: str) -> list:
+  dump = re.sub(r"^\\restrict.*$", "", dump, flags=re.MULTILINE)
+  dump = re.sub(r"^\\unrestrict.*$", "", dump, flags=re.MULTILINE)
+  
+  sql_expr = exp.transpile(dump, read="postgres", write="postgres", comments=False)
+  new_sql_expr = []
+  for expr in sql_expr:
+    try:
+      expr = exp.parse_one(expr)
+      if isinstance(expr, exp.expressions.ddl.Alter):
+        new_sql_expr.append(expr.sql() + ";")
+      elif (isinstance(expr, exp.expressions.ddl.Create) and expr.kind == "TABLE"):
+        new_sql_expr.append(expr.sql() + ";")
+    except exp.errors.ParseError:
+      continue
+
+  return new_sql_expr
+  
 
 
-def fetch_schema_json(db_url: str, schema_name: str) -> dict:
-  """Introspect a Postgres schema and return its tables/columns/constraints as JSON."""
-  with psycopg.connect(db_url) as conn:
-    with conn.cursor() as cur:
-      return fetch_schema_json_cur(cur, schema_name)
-
-
-def get_table_schema(conn, tables: list[str]) -> dict:
-  """Describe each table (name, columns, types, nullability, primary keys) as JSON."""
-  result = []
-  with conn.cursor() as cur:
-    for table in tables:
-      cur.execute("""
-        SELECT
-          c.column_name,
-          c.data_type,
-          c.is_nullable,
-          pk.column_name IS NOT NULL AS primary_key
-        FROM information_schema.columns c
-        LEFT JOIN (
-          SELECT ku.column_name
-          FROM information_schema.table_constraints tc
-          JOIN information_schema.key_column_usage ku
-            ON tc.constraint_name = ku.constraint_name
-           AND tc.table_schema = ku.table_schema
-          WHERE tc.constraint_type = 'PRIMARY KEY'
-            AND tc.table_name = %s
-            AND tc.table_schema = 'public'
-        ) pk ON c.column_name = pk.column_name
-        WHERE c.table_name = %s AND c.table_schema = 'public'
-        ORDER BY c.ordinal_position
-      """, (table, table))
-      cols = cur.fetchall()
-      if not cols:
-        continue
-      result.append({
-        "name": table,
-        "columns": [
-          {
-            "name": col_name,
-            "type": data_type,
-            "nullable": nullable == "YES",
-            "primary_key": primary_key,
-          }
-          for col_name, data_type, nullable, primary_key in cols
-        ],
-      })
-  return {"tables": result}
+def get_table_schema(db_url: str, schema_name: str, tables: list[str]) -> str:
+  """Describe the given tables (columns, types, constraints, indexes) as DDL,
+  via a selective `pg_dump --schema-only`."""
+  return fetch_schema_ddl(db_url, schema_name, tables)
 
 
 def get_table_samples(conn, tables: list[str]) -> dict:

@@ -6,7 +6,7 @@ import sqlglot as exp
 
 import psycopg
 from dotenv import load_dotenv
-from db_tools import fetch_schema_json, fetch_schema_json_cur
+from db_tools import fetch_schema_ddl
 from llm_tools import *
 
 load_dotenv()
@@ -19,20 +19,23 @@ SOURCE_SCHEMA = os.getenv("SOURCE_SCHEMA", "public")
 if not DB_URL:
   raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
-def fetch_schema(db_url: str) -> dict:
-  return fetch_schema_json(db_url, SOURCE_SCHEMA)
+def fetch_schema(db_url: str) -> str:
+  return fetch_schema_ddl(db_url, SOURCE_SCHEMA)
 
-def build_prompt(template_path: str, schema: dict) -> str:
+def build_prompt(template_path: str, schema: str) -> str:
   with open(template_path) as f:
     template = f.read()
-  return template.replace("{DB_SCHEMA}", json.dumps(schema, indent=2))
+  return template.replace("{DB_SCHEMA}", schema)
 
 def extract_json(content: str) -> dict:
   fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
   raw = fenced.group(1) if fenced else content
   return json.loads(raw, strict=False)
 
-# Checks syntactic validity of statements
+# Checks syntactic validity of statements. The schema is committed (rather than
+# rolled back) so it can be introspected with `pg_dump` afterwards, then dropped
+# again to leave the database clean; instantiate.py recreates it from scratch
+# later anyway, so this leaves no lasting side effect.
 def validate_generated_db(generated_db: dict) -> dict:
   with psycopg.connect(DB_URL) as conn:
     conn.autocommit = False
@@ -43,21 +46,30 @@ def validate_generated_db(generated_db: dict) -> dict:
         cur.execute(f"SET search_path TO {SCHEMA_NAME}, public;")
 
         # Checking if CREATE/ALTER stmt are valid
-        for stmt in exp.transpile(generated_db["target_database_schema"]):
+        for stmt in exp.transpile(generated_db["target_database_schema"], read="postgres"):
           cur.execute(stmt)
 
         # Checking if insertion select queries are valid
         for table in generated_db["table_generation_queries"]:
           cur.execute(
-            f"EXPLAIN INSERT INTO {table["target_table"]} {exp.transpile(table["query"])[0]}"
+            f"EXPLAIN INSERT INTO {table["target_table"]} {exp.transpile(table["query"], read="postgres")[0]}"
           )
 
-        # Getting schema in JSON format for nxt step
-        target_schema_json = fetch_schema_json_cur(cur, SCHEMA_NAME)
-    finally:
+      # Commit so the schema is visible to `pg_dump`, which runs as a
+      # separate connection/process and cannot see uncommitted changes.
+      conn.commit()
+      try:
+        # Getting the validated schema's real DDL for the next step
+        generated_db["target_database_schema"] = fetch_schema_ddl(DB_URL, SCHEMA_NAME)
+      finally:
+        with conn.cursor() as cur:
+          cur.execute(f"DROP SCHEMA IF EXISTS {SCHEMA_NAME} CASCADE;")
+        conn.commit()
+    except Exception:
       conn.rollback()
+      raise
 
-  return target_schema_json
+    return generated_db
 
 
 def main() -> None:
@@ -84,7 +96,7 @@ def main() -> None:
     generated_db = extract_json(content)
 
     print("Validating...")
-    generated_db["target_database_schema_json"] = validate_generated_db(generated_db)
+    generated_db = validate_generated_db(generated_db)
   except json.JSONDecodeError as e:
     error = e
     raise RuntimeError(

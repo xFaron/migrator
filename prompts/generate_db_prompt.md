@@ -39,11 +39,11 @@ The input may contain information such as:
 - Indexes and their definitions
 - Other relational constraints and metadata
 
-The initial database information is available through the placeholder:
+The initial database information is available through the placeholder below, given as PostgreSQL DDL produced by `pg_dump --schema-only`:
 
-```json
+```sql
 {DB_SCHEMA}
-````
+```
 
 Treat the schema represented above as the **source database**. All target tables must be generated solely from data available in this source database.
 

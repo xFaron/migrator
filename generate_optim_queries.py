@@ -15,6 +15,7 @@ load_dotenv()
 
 DB_URL = os.getenv("DATABASE_URL")
 OPTIM_PROMPT_PATH = os.getenv("OPTIM_PROMPT_PATH", "prompts/optim_query_prompt.md")
+SOURCE_SCHEMA = os.getenv("SOURCE_SCHEMA", "public")
 
 
 def extract_tables(query: str) -> list[str]:
@@ -36,13 +37,13 @@ def extract_json(content: str) -> dict:
   return json.loads(raw, strict=False)
 
 
-def build_prompt(query: str, query_plan: str, table_schema: dict, table_samples: dict) -> str:
+def build_prompt(query: str, query_plan: str, table_schema: str, table_samples: dict) -> str:
   with open(OPTIM_PROMPT_PATH) as f:
     template = f.read()
   return (template
     .replace("{QUERY}", query)
     .replace("{QUERY_PLAN}", query_plan)
-    .replace("{TABLE_SCHEMAS}", json.dumps(table_schema, indent=2, default=str))
+    .replace("{TABLE_SCHEMAS}", table_schema)
     .replace("{TABLE_SAMPLES}", json.dumps(table_samples, indent=2, default=str)))
 
 
@@ -83,7 +84,7 @@ def main() -> None:
 
       # Gather context
       tables = extract_tables(query)
-      table_schema = get_table_schema(conn, tables)
+      table_schema = get_table_schema(DB_URL, SOURCE_SCHEMA, tables)
       table_samples = get_table_samples(conn, tables)
 
       try:

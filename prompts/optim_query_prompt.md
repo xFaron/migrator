@@ -4,7 +4,7 @@ Semantic optimization involves rewriting query logic — converting subqueries t
 
 ## Inputs
 
-**[TABLE SCHEMAS]** — column names, data types, nullability, and primary keys for every table the query touches.
+**[TABLE SCHEMAS]** — PostgreSQL DDL (from `pg_dump --schema-only`) for every table the query touches: columns, data types, nullability, primary keys, and constraints.
 
 **[TABLE SAMPLES]** — the first 5 rows of each table, so you can reason about data distributions and cardinality.
 
@@ -33,7 +33,7 @@ Semantic optimization involves rewriting query logic — converting subqueries t
 
 ## [TABLE SCHEMAS]
 
-```json
+```sql
 {TABLE_SCHEMAS}
 ```
 
