@@ -92,15 +92,26 @@ Output: `test_dbs/db<N>/raw_queries.json`
 
 ### 5. Evaluate queries — `evaluate_queries.py`
 
-Matches each query in `queries.json` with its counterpart in `raw_queries.json` and, per pair, captures planner
-cost and measured runtime (`EXPLAIN ANALYZE`) plus a correctness rating (via `db_tools/correctness`, backed by
-sqlsolver).
+Matches each query in `queries.json` with its counterpart produced by a *generation method* and, per pair,
+captures planner cost and measured runtime (`EXPLAIN ANALYZE`) on both D and D′, plus a correctness rating
+(via `db_tools/correctness`, backed by sqlsolver).
+
+A generation method is identified by its file name: method `<name>` reads `<name>_queries.json` and writes
+`eval_<name>_queries.json`. Any future generation script is evaluated with no change to this script, as soon
+as it writes `<name>_queries.json` in `queries.json`'s shape. The one exception is `raw`, which keeps writing
+`eval_queries.json`.
 
 ```bash
-python evaluate_queries.py [--db N]
+python evaluate_queries.py [--db N] [--method NAME] [--all-methods]
 ```
 
-Output: `test_dbs/db<N>/eval_queries.json`
+| Argument | Default | Description |
+|---|---|---|
+| `--db N` | 1 | Test-case number |
+| `--method NAME` | `raw` | Method to evaluate, i.e. the file `<NAME>_queries.json`; repeatable |
+| `--all-methods` | off | Evaluate every method with an artifact in this test case |
+
+Output: `test_dbs/db<N>/eval_queries.json` (method `raw`), `test_dbs/db<N>/eval_<name>_queries.json` (others)
 
 ### 6. Generate optimized queries — `generate_optim_queries.py` (WIP)
 
@@ -138,9 +149,12 @@ Output: `results_table.json` (and the same tables printed to stdout).
 ```
 test_dbs/
   db1/
-    db.json           # Generated database D (schema + population queries)
-    queries.json      # Queries on D
-    raw_queries.json  # Equivalent queries on D′
+    db.json                   # Generated database D (schema + population queries)
+    queries.json              # Queries on D
+    raw_queries.json          # Equivalent queries on D′ (method `raw`)
+    <name>_queries.json       # Queries on D′ from generation method <name>
+    eval_queries.json         # Evaluation of method `raw`
+    eval_<name>_queries.json  # Evaluation of method <name>
   db2/
     ...
 ```
