@@ -107,6 +107,32 @@ Output: `test_dbs/db<N>/eval_queries.json`
 Baseline for generating an optimized/rewritten version of a query and checking equivalence with the original.
 See `TODO.md` for the broader evaluation plan.
 
+### 7. Tabulate results — `tabulate_results.py`
+
+Reads every evaluation file across every test case and reduces them to a comparison table of the three
+headline metrics per generation method: correctness (% of queries migrated correctly, per database and
+pooled), and the geometric means of runtime and cost improvement over a chosen baseline method.
+
+A generation method is identified by its evaluation file: `eval_queries.json` is method `raw` (the
+deterministic rewrite of step 4), and `eval_<name>_queries.json` is method `<name>`. Improvements are
+ratios of `baseline / method`, so a value above 1 means the method beat the baseline.
+
+```bash
+python tabulate_results.py [--baseline NAME] [--db N] [--method NAME] [--output PATH]
+```
+
+Output: `results_table.json` (and the same tables printed to stdout).
+
+| Argument | Default | Description |
+|---|---|---|
+| `--test-dbs DIR` | `test_dbs` | Directory holding the `db<N>/` test cases |
+| `--db N` | all | Restrict to one test case; repeatable |
+| `--method NAME` | all found | Restrict to one generation method; repeatable |
+| `--baseline NAME` | `raw` | Method the improvements are measured against; `d` means the original query on D (i.e. the pre-migration numbers) |
+| `--correct-at LEVEL` | `DB_EQ` | Lowest equivalence rating counted as correct (`INV` < `NEQ` < `ST_EQ` < `DB_EQ` < `EQ`) |
+| `--pairs POLICY` | `both-correct` | Which queries contribute to the geometric means: `both-correct`, `method-correct` or `all` |
+| `--output PATH` | `results_table.json` | Where to write the JSON results |
+
 ## Test case layout
 
 ```
