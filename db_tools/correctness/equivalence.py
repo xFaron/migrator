@@ -22,15 +22,8 @@ SQL_SOLVER_LIB_PATH = os.path.join(_MODULE_DIR, "sqlsolver")
 SQL_SOLVER_BIN_PATH = os.path.join(_MODULE_DIR, "sqlsolver", "sqlsolver-v1.1.0.jar")
 
 def simple_equivalence(curr, query_a: str, query_b: str) -> bool:
-  # (ResA - ResB) U (ResB - ResA) = Nullset => Equivalent
-  # Queries may or may not carry a trailing semicolon (e.g. queries.json's
-  # do, raw_queries.json's don't); strip it since both are embedded
-  # mid-expression here and an embedded ";" would break the composite query.
   query_a = query_a.strip().rstrip(";")
   query_b = query_b.strip().rstrip(";")
-  # Each operand is individually parenthesized: a query with a leading WITH
-  # clause (e.g. raw_queries.json's CTE-inlined queries) is only valid as one
-  # side of a set operation when wrapped in its own parentheses.
   eqv_query = f"""
   (
     ({query_a}) EXCEPT ALL ({query_b})
@@ -66,11 +59,6 @@ def sqlsolver_schema_modifier(schema: List[str]) -> List[str]:
 
     schema_node = create.this
     for action in alter.args.get("actions", []):
-      # Only ADD CONSTRAINT actions belong in the CREATE TABLE's column-def
-      # list. Other ALTER actions pg_dump emits (e.g. ALTER COLUMN ... SET
-      # DEFAULT nextval(...) for serial/identity columns) aren't relevant to
-      # schema-equivalence checking and would corrupt the merged CREATE's
-      # syntax if appended directly, so they're skipped.
       if isinstance(action, sqlglot.exp.AddConstraint):
         for constraint_expr in action.expressions:
           schema_node.append("expressions", constraint_expr)
@@ -125,8 +113,8 @@ def rate_equivalence(curr, query_a: str, query_b: str, schema: List[str]) -> Equ
   try:
     # Checking Syntactical correctness
     try:
-      get_query_plan(curr, query_a)
-      get_query_plan(curr, query_b)
+      get_query_plan(curr, query_a, analyze=False)
+      get_query_plan(curr, query_b, analyze=False)
     except psycopg.errors.QueryCanceled:
       curr_eqv = Equivalence.INV
       raise AssertionError

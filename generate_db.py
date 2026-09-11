@@ -19,9 +19,6 @@ SOURCE_SCHEMA = os.getenv("SOURCE_SCHEMA", "public")
 if not DB_URL:
   raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
-def fetch_schema(db_url: str) -> str:
-  return fetch_schema_ddl(db_url, SOURCE_SCHEMA)
-
 def build_prompt(template_path: str, schema: str) -> str:
   with open(template_path) as f:
     template = f.read()
@@ -32,10 +29,7 @@ def extract_json(content: str) -> dict:
   raw = fenced.group(1) if fenced else content
   return json.loads(raw, strict=False)
 
-# Checks syntactic validity of statements. The schema is committed (rather than
-# rolled back) so it can be introspected with `pg_dump` afterwards, then dropped
-# again to leave the database clean; instantiate.py recreates it from scratch
-# later anyway, so this leaves no lasting side effect.
+# Checks syntactic validity of statements.
 def validate_generated_db(generated_db: dict) -> dict:
   with psycopg.connect(DB_URL) as conn:
     conn.autocommit = False
@@ -82,7 +76,7 @@ def main() -> None:
 
   os.makedirs(output_dir, exist_ok=True)
 
-  schema = fetch_schema(DB_URL)
+  schema = fetch_schema_ddl(DB_URL, SOURCE_SCHEMA)
   prompt = build_prompt(PROMPT_TEMPLATE_PATH, schema)
 
   print("Calling LLM...")

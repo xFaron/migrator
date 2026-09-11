@@ -10,13 +10,6 @@ O_LST = 1 # Output list
 O_STR = 0 # Output str
 
 def fetch_schema_ddl(db_url: str, schema_name: str, tables: list[str] | None = None, flags: int = O_STR) -> str:
-  """Dump a Postgres schema's DDL (CREATE TABLE/constraint/index statements) via
-  `pg_dump --schema-only`, optionally restricted to a subset of tables.
-
-  This is the canonical way to describe a schema to an LLM prompt: it reflects
-  exactly what Postgres will create, with none of the drift or omissions a
-  hand-rolled information_schema/pg_catalog query can introduce.
-  """
   cmd = [
     "pg_dump", db_url,
     "--schema-only",
@@ -59,11 +52,16 @@ def _clean_pg_dump_output(dump: str) -> list:
   return new_sql_expr
   
 
-
-def get_table_schema(db_url: str, schema_name: str, tables: list[str]) -> str:
-  """Describe the given tables (columns, types, constraints, indexes) as DDL,
-  via a selective `pg_dump --schema-only`."""
-  return fetch_schema_ddl(db_url, schema_name, tables)
+def extract_tables(query: str) -> list[str]:
+  try:
+    parsed = sqlglot.parse_one(query, dialect="postgres")
+    cte_names = {cte.alias for cte in parsed.find_all(exp.CTE)}
+    return list({
+      node.name for node in parsed.walk()
+      if isinstance(node, exp.Table) and node.name and node.name not in cte_names
+    })
+  except Exception:
+    return []
 
 
 def get_table_samples(conn, tables: list[str]) -> dict:
@@ -84,40 +82,20 @@ def get_table_samples(conn, tables: list[str]) -> dict:
   return {"tables": result}
 
 
-# Runs EXPLAIN (FORMAT JSON), or plain EXPLAIN (text) if json=False, which is
-# more token-efficient for feeding into an LLM prompt.
-def get_query_plan(conn_or_cur, query: str, json: bool = True) -> str:
+def get_query_plan(conn_or_cur, query: str, analyze: bool = True, json: bool = True) -> dict | str:
   if hasattr(conn_or_cur, "cursor"):
     with conn_or_cur.cursor() as cur:
-      return _query_plan_from_cursor(cur, query, json)
-  return _query_plan_from_cursor(conn_or_cur, query, json)
+      return _query_plan_from_cursor(cur, query, analyze, json)
+  return _query_plan_from_cursor(conn_or_cur, query, analyze, json)
 
-def _query_plan_from_cursor(cur, query: str, json: bool = True) -> str:
+def _query_plan_from_cursor(cur, query: str, analyze: bool = True, json: bool = True) -> dict | str:
+  options = "ANALYZE, FORMAT JSON" if analyze and json else "FORMAT JSON" if json else "ANALYZE" if analyze else ""
   if not json:
-    cur.execute(f"EXPLAIN {query}")
+    cur.execute(f"EXPLAIN ({options}) {query}" if options else f"EXPLAIN {query}")
     return "\n".join(row[0] for row in cur.fetchall())
-  cur.execute(f"EXPLAIN (FORMAT JSON) {query}")
+  cur.execute(f"EXPLAIN ({options}) {query}")
   plan = cur.fetchone()[0]
-  return _json.dumps(plan, indent=2)
-
-
-# Runs EXPLAIN (ANALYZE, FORMAT JSON): executes the query once and returns the
-# plan dict, which carries both the planner's cost estimate ("Total Cost") and
-# the measured actual runtime ("Execution Time"). If json=False, runs plain
-# EXPLAIN ANALYZE (text) instead, returning the raw text output, which is
-# more token-efficient for feeding into an LLM prompt.
-def get_query_plan_analyze(conn_or_cur, query: str, json: bool = True) -> dict | str:
-  if hasattr(conn_or_cur, "cursor"):
-    with conn_or_cur.cursor() as cur:
-      return _query_plan_analyze_from_cursor(cur, query, json)
-  return _query_plan_analyze_from_cursor(conn_or_cur, query, json)
-
-def _query_plan_analyze_from_cursor(cur, query: str, json: bool = True) -> dict | str:
-  if not json:
-    cur.execute(f"EXPLAIN ANALYZE {query}")
-    return "\n".join(row[0] for row in cur.fetchall())
-  cur.execute(f"EXPLAIN (ANALYZE, FORMAT JSON) {query}")
-  return cur.fetchone()[0][0]
+  return plan[0] if analyze else _json.dumps(plan, indent=2)
 
 
 # Runs query

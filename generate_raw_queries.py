@@ -2,11 +2,21 @@ import argparse
 import json
 import os
 
+import psycopg
 import sqlglot
 from dotenv import load_dotenv
 from sqlglot import exp
 
+from db_tools.correctness import simple_equivalence
+
 load_dotenv()
+
+DB_URL = os.getenv("DATABASE_URL")
+SOURCE_SCHEMA = os.getenv("SOURCE_SCHEMA", "public")
+GENERATED_SCHEMA = os.getenv("GENERATED_SCHEMA", "query_migr_generated")
+
+if not DB_URL:
+  raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
 
 def extract_table_columns(schema_ddl: str) -> dict[str, list[str]]:
@@ -27,25 +37,20 @@ def extract_table_columns(schema_ddl: str) -> dict[str, list[str]]:
   return columns_by_table
 
 
+def split_statements(sql: str) -> list[str]:
+  return [s.strip() for s in sql.split(";") if s.strip()]
+
+
 def build_raw_query(query: str, generation_query_by_table: dict, columns_by_table: dict) -> str:
   expr = sqlglot.parse_one(query, dialect="postgres")
-
   with_clause = expr.args.get("with_")
 
-  # Table nodes may be schema-qualified (e.g. query_migr_generated.foo), since
-  # generate_query.py prompts the LLM with schema-qualified pg_dump DDL.
-  # Match on the unqualified name so those are still recognized.
   tables = {
     node.name for node in expr.walk()
     if isinstance(node, exp.Table) and node.name in generation_query_by_table
   }
 
   for i, table in enumerate(tables):
-    # table_generation_queries' SELECTs are unaliased (they're only ever run
-    # as `INSERT INTO target_table SELECT ...`, matched positionally), so
-    # inlining them as a CTE without an explicit column list would leave
-    # Postgres-invented names (?column?, sum, max, ...) instead of the real
-    # target table's column names that the rest of the query references.
     alias = f"{table}({', '.join(columns_by_table[table])})" if table in columns_by_table else table
     expr = expr.with_(alias, as_=generation_query_by_table[table], append=(i != 0))
 
@@ -53,12 +58,6 @@ def build_raw_query(query: str, generation_query_by_table: dict, columns_by_tabl
     for cte in with_clause.expressions:
       expr = expr.with_(cte.alias, as_=cte.this)
 
-  # expr.with_() copies the tree by default, so any node mutation must happen
-  # on the final tree, after ALL with_() calls (including restoring the
-  # original CTEs above, whose bodies may themselves reference a qualified
-  # target table). Strip schema qualifiers from matching Table nodes so they
-  # resolve to the unqualified CTEs just added, instead of the real,
-  # schema-qualified target table.
   for node in expr.walk():
     if isinstance(node, exp.Table) and node.name in tables:
       node.set("db", None)
@@ -75,7 +74,6 @@ def main() -> None:
   db_dir = os.path.join("test_dbs", f"db{args.db}")
   db_path = os.path.join(db_dir, "db.json")
   queries_path = os.path.join(db_dir, "queries.json")
-  output_path = os.path.join(db_dir, "raw_queries.json")
 
   for path in (db_path, queries_path):
     if not os.path.exists(path):
@@ -96,28 +94,64 @@ def main() -> None:
   }
   columns_by_table = extract_table_columns(db_data["target_database_schema"])
 
-  raw_queries = []
-
-  for q in q_data["queries"]:
-    qid = q.get("id", "?")
-
-    if "error" in q:
-      print(f"[{qid}] Skipping (already has error): {q['error']}")
-      raw_queries.append(q)
-      continue
-
+  # Instantiate D in a transaction that's rolled back at the end: this script
+  # only needs D to exist long enough to verify each raw query against its
+  # source, and must not disturb (or depend on) a separately instantiated
+  # GENERATED_SCHEMA.
+  with psycopg.connect(DB_URL) as conn:
+    conn.autocommit = False
     try:
-      raw_query = build_raw_query(q["query"], generation_query_by_table, columns_by_table)
-    except Exception as e:
-      print(f"[{qid}] Failed to transform query: {e}")
-      raw_queries.append({**q, "error": f"Failed to transform query: {e}"})
-      continue
+      with conn.cursor() as cur:
+        cur.execute(f"DROP SCHEMA IF EXISTS {GENERATED_SCHEMA} CASCADE;")
+        cur.execute(f"CREATE SCHEMA {GENERATED_SCHEMA};")
+        cur.execute(f"SET search_path TO {GENERATED_SCHEMA}, {SOURCE_SCHEMA};")
 
-    print(f"[{qid}] OK")
-    raw_queries.append({**q, "query": raw_query})
+        for stmt in split_statements(db_data["target_database_schema"]):
+          cur.execute(stmt)
 
-  with open(output_path, "w") as f:
-    json.dump({"queries": raw_queries}, f, indent=2)
+        print("Populating tables...")
+        for entry in db_data["table_generation_queries"]:
+          cur.execute(f"INSERT INTO {entry['target_table']} {entry['query']}")
+
+        # LLM-generated queries can be pathologically expensive; cap runtime so
+        # one bad query can't hang this indefinitely (same policy as instantiate.py).
+        cur.execute("SET statement_timeout = '60s';")
+
+        for q in q_data["queries"]:
+          qid = q.get("id", "?")
+
+          if "error" in q:
+            print(f"[{qid}] Skipping (already has error): {q['error']}")
+            continue
+
+          try:
+            q["raw_query"] = build_raw_query(q["query"], generation_query_by_table, columns_by_table)
+          except Exception as e:
+            print(f"[{qid}] Failed to transform query: {e}")
+            q["raw_query_error"] = f"Failed to transform query: {e}"
+            continue
+
+          # A savepoint lets us recover from a per-query failure (e.g. a
+          # statement_timeout cancellation) without poisoning the whole
+          # transaction, since Postgres otherwise aborts it entirely until
+          # a ROLLBACK is issued.
+          cur.execute("SAVEPOINT raw_query_check")
+          try:
+            if simple_equivalence(cur, q["query"], q["raw_query"]):
+              print(f"[{qid}] OK")
+            else:
+              print(f"[{qid}] Raw query result does not match source query")
+              q["raw_query_error"] = "Raw query result does not match source query"
+            cur.execute("RELEASE SAVEPOINT raw_query_check")
+          except Exception as e:
+            cur.execute("ROLLBACK TO SAVEPOINT raw_query_check")
+            print(f"[{qid}] Failed to verify raw query: {e}")
+            q["raw_query_error"] = f"Failed to verify raw query: {e}"
+    finally:
+      conn.rollback()
+
+  with open(queries_path, "w") as f:
+    json.dump(q_data, f, indent=2)
 
   print("Done.")
 
