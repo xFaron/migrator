@@ -52,6 +52,15 @@ def _clean_pg_dump_output(dump: str) -> list:
   return new_sql_expr
   
 
+def strip_schema_qualifiers(query: str, dialect: str = "postgres") -> str:
+  """Remove schema/catalog qualifiers from table references (e.g. `public.lineitem` -> `lineitem`)."""
+  parsed = exp.parse_one(query, dialect=dialect)
+  for table in parsed.find_all(exp.exp.Table):
+    table.set("db", None)
+    table.set("catalog", None)
+  return parsed.sql(dialect=dialect)
+
+
 def extract_tables(query: str) -> list[str]:
   try:
     parsed = sqlglot.parse_one(query, dialect="postgres")

@@ -25,8 +25,8 @@ if not DB_URL:
 
 
 def extract_json(content: str) -> dict:
-  fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
-  raw = fenced.group(1) if fenced else content
+  fenced = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+  raw = fenced[-1] if fenced else content
   return json.loads(raw, strict=False)
 
 
@@ -66,9 +66,8 @@ def build_prompt(
 
 def merge_baseline(baseline: int, src_queries: list[dict], migrated: list[dict]) -> None:
   """Writes each migrated query into its matching src_queries entry in place, as
-  baseline_<N>_query (or baseline_<N>_error if the model didn't return one)."""
+  baseline_<N>_query (or error if the model didn't return one)."""
   query_key = f"baseline_{baseline}_query"
-  error_key = f"baseline_{baseline}_error"
 
   migrated_by_id = {}
   for q in migrated:
@@ -84,7 +83,7 @@ def merge_baseline(baseline: int, src_queries: list[dict], migrated: list[dict])
     migrated_query = migrated_by_id.get(qid)
     if not migrated_query:
       print(f"[{qid}] Model returned no migrated query")
-      q[error_key] = "Model returned no migrated query"
+      q["error"] = "Model returned no migrated query"
       continue
 
     print(f"[{qid}] OK")

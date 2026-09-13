@@ -84,13 +84,13 @@ Output: `test_dbs/db<N>/queries.json`
 Steps 4-7 below don't produce their own output files: each one reads `test_dbs/db<N>/queries.json`, adds its
 own field(s) to every query by id, and writes the same file back in place. A query's record accumulates
 `query` → `raw_query` → `baseline_1_query`/`baseline_2_query` → `optim_query` → `cost`/`runtime_ms`/`equivalence`
-as later steps run; a stage that fails for a given query tags it with a `<stage>_error` field instead of
-dropping it (e.g. `raw_query_error`, `baseline_1_error`, `optim_error`, `eval_error`).
+as later steps run; a stage that fails for a given query tags it with an `error` field instead of dropping it,
+and any later stage skips a query that already has one.
 
 ### 4. Generate raw queries on D′ — `generate_raw_queries.py`
 
 Rewrites each query in `queries.json` to run directly on D′ by inlining each table's generation subquery, and
-writes the rewritten query into that query's `raw_query` field (or `raw_query_error` on a transform failure).
+writes the rewritten query into that query's `raw_query` field (or `error` on a transform failure).
 
 ```bash
 python generate_raw_queries.py [--db N]
@@ -100,7 +100,7 @@ python generate_raw_queries.py [--db N]
 
 For each query with a `raw_query`, captures planner cost and measured runtime (`EXPLAIN ANALYZE`) for both
 `query` (on D) and `raw_query` (on D′), plus a correctness rating (via `db_tools/correctness`, backed by
-sqlsolver), writing `cost`, `runtime_ms` and `equivalence` back onto the query (or `eval_error` on failure).
+sqlsolver), writing `cost`, `runtime_ms` and `equivalence` back onto the query (or `error` on failure).
 
 ```bash
 python evaluate_queries.py [--db N]
@@ -123,12 +123,12 @@ python generate_baselines.py [--db N] [--baseline 1] [--baseline 2]
 ```
 
 Writes each baseline's migrated query into that query's `baseline_1_query`/`baseline_2_query` field. Queries
-the model dropped are tagged with `baseline_1_error`/`baseline_2_error` instead.
+the model dropped are tagged with `error` instead.
 
 ### 7. Generate optimized queries — `generate_optim_queries.py` (WIP)
 
 Asks an LLM to produce an optimized/rewritten version of each query's `raw_query`, writing the result into that
-query's `optim_query` field (or `optim_error` on failure). See `TODO.md` for the broader evaluation plan.
+query's `optim_query` field (or `error` on failure). See `TODO.md` for the broader evaluation plan.
 
 ## Test case layout
 

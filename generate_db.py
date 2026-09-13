@@ -6,7 +6,7 @@ import sqlglot as exp
 
 import psycopg
 from dotenv import load_dotenv
-from db_tools import fetch_schema_ddl
+from db_tools import fetch_schema_ddl, strip_schema_qualifiers, O_LST
 from llm_tools import *
 
 load_dotenv()
@@ -25,8 +25,8 @@ def build_prompt(template_path: str, schema: str) -> str:
   return template.replace("{DB_SCHEMA}", schema)
 
 def extract_json(content: str) -> dict:
-  fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
-  raw = fenced.group(1) if fenced else content
+  fenced = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+  raw = fenced[-1] if fenced else content
   return json.loads(raw, strict=False)
 
 # Checks syntactic validity of statements.
@@ -54,7 +54,10 @@ def validate_generated_db(generated_db: dict) -> dict:
       conn.commit()
       try:
         # Getting the validated schema's real DDL for the next step
-        generated_db["target_database_schema"] = fetch_schema_ddl(DB_URL, SCHEMA_NAME)
+        stmts = fetch_schema_ddl(DB_URL, SCHEMA_NAME, flags=O_LST)
+        stmts = list(map(lambda stmt: strip_schema_qualifiers(stmt) + ";", stmts))
+        generated_db["target_database_schema"] = "\n\n".join(stmts)
+        
       finally:
         with conn.cursor() as cur:
           cur.execute(f"DROP SCHEMA IF EXISTS {SCHEMA_NAME} CASCADE;")

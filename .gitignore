@@ -1,5 +1,5 @@
 # Folders
-venv/
+.venv
 TPC-H V3.0.1/
 test_dbs/
 SQLSolver_artifacts/

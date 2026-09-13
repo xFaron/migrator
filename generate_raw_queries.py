@@ -6,6 +6,7 @@ import psycopg
 import sqlglot
 from dotenv import load_dotenv
 from sqlglot import exp
+from tqdm import tqdm
 
 from db_tools.correctness import simple_equivalence
 
@@ -52,11 +53,11 @@ def build_raw_query(query: str, generation_query_by_table: dict, columns_by_tabl
 
   for i, table in enumerate(tables):
     alias = f"{table}({', '.join(columns_by_table[table])})" if table in columns_by_table else table
-    expr = expr.with_(alias, as_=generation_query_by_table[table], append=(i != 0))
+    expr = expr.with_(alias, as_=generation_query_by_table[table], append=(i != 0), dialect="postgres")
 
   if with_clause:
     for cte in with_clause.expressions:
-      expr = expr.with_(cte.alias, as_=cte.this)
+      expr = expr.with_(cte.alias, as_=cte.this, dialect="postgres")
 
   for node in expr.walk():
     if isinstance(node, exp.Table) and node.name in tables:
@@ -110,43 +111,37 @@ def main() -> None:
           cur.execute(stmt)
 
         print("Populating tables...")
-        for entry in db_data["table_generation_queries"]:
+        for entry in tqdm(db_data["table_generation_queries"]):
           cur.execute(f"INSERT INTO {entry['target_table']} {entry['query']}")
 
         # LLM-generated queries can be pathologically expensive; cap runtime so
         # one bad query can't hang this indefinitely (same policy as instantiate.py).
-        cur.execute("SET statement_timeout = '60s';")
+        cur.execute("SET statement_timeout = '600s';")
 
-        for q in q_data["queries"]:
+        print("Checking result equivalence...")
+        for q in tqdm(q_data["queries"]):
           qid = q.get("id", "?")
 
           if "error" in q:
-            print(f"[{qid}] Skipping (already has error): {q['error']}")
+            # print(f"[{qid}] Skipping (already has error): {q['error']}")
             continue
 
           try:
             q["raw_query"] = build_raw_query(q["query"], generation_query_by_table, columns_by_table)
           except Exception as e:
-            print(f"[{qid}] Failed to transform query: {e}")
-            q["raw_query_error"] = f"Failed to transform query: {e}"
+            # print(f"[{qid}] Failed to transform query: {e}")
+            q["error"] = f"Failed to transform query: {e}"
             continue
 
-          # A savepoint lets us recover from a per-query failure (e.g. a
-          # statement_timeout cancellation) without poisoning the whole
-          # transaction, since Postgres otherwise aborts it entirely until
-          # a ROLLBACK is issued.
           cur.execute("SAVEPOINT raw_query_check")
           try:
-            if simple_equivalence(cur, q["query"], q["raw_query"]):
-              print(f"[{qid}] OK")
-            else:
-              print(f"[{qid}] Raw query result does not match source query")
-              q["raw_query_error"] = "Raw query result does not match source query"
+            if not simple_equivalence(cur, q["query"], q["raw_query"]):
+              q["error"] = "Raw query result does not match source query"
             cur.execute("RELEASE SAVEPOINT raw_query_check")
           except Exception as e:
             cur.execute("ROLLBACK TO SAVEPOINT raw_query_check")
-            print(f"[{qid}] Failed to verify raw query: {e}")
-            q["raw_query_error"] = f"Failed to verify raw query: {e}"
+            # print(f"[{qid}] Failed to verify raw query: {e}")
+            q["error"] = f"Failed to verify raw query: {e}"
     finally:
       conn.rollback()
 

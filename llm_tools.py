@@ -65,6 +65,7 @@ def query_model(prompt: str, reasoning: bool = False, provider: str = DEFAULT_PR
       f"{GOOGLE_API_URL}?key={GOOGLE_API_KEY}",
       headers=GOOGLE_HEADERS,
       json=body,
+      timeout=120,
     )
     print("STATUS:", resp.status_code)
     # print("RESPONSE:", resp.text)
@@ -88,7 +89,7 @@ def query_model(prompt: str, reasoning: bool = False, provider: str = DEFAULT_PR
     }
     if reasoning:
       body["reasoning"] = {"enabled": True}
-    resp = requests.post(OPENROUTER_API_URL, headers=OPENROUTER_HEADERS, json=body)
+    resp = requests.post(OPENROUTER_API_URL, headers=OPENROUTER_HEADERS, json=body, timeout=120)
 
     print("STATUS:", resp.status_code)
     print("RESPONSE:", resp.text)

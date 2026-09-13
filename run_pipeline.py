@@ -26,6 +26,7 @@ def pipeline_steps(db_num: int, k: int) -> list[list[str]]:
   return [
     [PYTHON, "generate_db.py", "--db", str(db_num)],
     [PYTHON, "generate_query.py", "--db", str(db_num), "--k", str(k)],
+    [PYTHON, "instantiate.py", f"test_dbs/db{db_num}/db.json", f"test_dbs/db{db_num}/queries.json"],
     [PYTHON, "generate_raw_queries.py", "--db", str(db_num)],
     [PYTHON, "generate_baselines.py", "--db", str(db_num)],
     [PYTHON, "generate_optim_queries.py", "--db", str(db_num)],

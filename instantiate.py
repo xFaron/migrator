@@ -3,6 +3,7 @@ import os
 import sys
 
 import psycopg
+from tqdm import tqdm
 from dotenv import load_dotenv
 
 if len(sys.argv) != 3:
@@ -37,7 +38,7 @@ def main() -> None:
           cur.execute(stmt)
 
         print("Populating tables...")
-        for entry in generated_db["table_generation_queries"]:
+        for entry in tqdm(generated_db["table_generation_queries"]):
           cur.execute(f"INSERT INTO {entry['target_table']} {entry['query']}")
         print("Populated all tables... Verifying queries")
 

@@ -18,8 +18,8 @@ OPTIM_PROMPT_PATH = os.getenv("OPTIM_PROMPT_PATH", "prompts/optim_query_prompt.m
 
 
 def extract_json(content: str) -> dict:
-  fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
-  raw = fenced.group(1) if fenced else content
+  fenced = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+  raw = fenced[-1] if fenced else content
   return json.loads(raw, strict=False)
 
 # Gets ddl of all input tables from schema_ddl ddl
@@ -77,7 +77,7 @@ def main() -> None:
     for q in q_data["queries"]:
       qid = q.get("id", "?")
 
-      if "error" in q or "raw_query_error" in q or "raw_query" not in q:
+      if "error" in q or "raw_query" not in q:
         print(f"[{qid}] Skipping (no raw query to optimize)")
         continue
 
@@ -91,14 +91,14 @@ def main() -> None:
         table_samples = get_table_samples(conn, tables)
       except Exception as e:
         print(f"[{qid}] Could not gather table context: {e}")
-        q["optim_error"] = f"Could not gather table context: {e}"
+        q["error"] = f"Could not gather table context: {e}"
         continue
 
       try:
         query_plan = get_query_plan(conn, query, analyze=False, json=False)
       except Exception as e:
         print(f"[{qid}] Could not get query plan: {e}")
-        q["optim_error"] = f"Could not get query plan: {e}"
+        q["error"] = f"Could not get query plan: {e}"
         continue
 
       # Query LLM
@@ -110,7 +110,7 @@ def main() -> None:
         optim_query = extract_json(content)["query"]
       except Exception as e:
         print(f"[{qid}] LLM failed: {e}")
-        q["optim_error"] = f"LLM failed: {e}"
+        q["error"] = f"LLM failed: {e}"
         continue
 
       print(f"[{qid}] OK")

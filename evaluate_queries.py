@@ -4,6 +4,7 @@ import os
 
 import psycopg
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 from db_tools import O_LST, fetch_schema_ddl, get_query_plan
 from db_tools.correctness import Equivalence, rate_equivalence
@@ -44,11 +45,12 @@ def main() -> None:
   methods = ["baseline_1_query", "baseline_2_query", "optim_query"]
   all_methods = [baseline] + methods
 
+  print("Beginning eval...")
   with psycopg.connect(DB_URL, autocommit=True) as conn:
     with conn.cursor() as cur:
-      cur.execute("SET statement_timeout = '60s';")
+      cur.execute("SET statement_timeout = '600s';")
 
-      for q in q_data["queries"]:
+      for q in tqdm(q_data["queries"]):
         qid = q.get("id", "?")
 
         if baseline not in q:
@@ -59,7 +61,7 @@ def main() -> None:
           baseline_cost, baseline_runtime = measure(cur, q[baseline], SOURCE_SCHEMA)
         except Exception as e:
           print(f"[{qid}] Failed to measure {baseline}: {e}")
-          q["eval_error"] = f"Failed to measure {baseline}: {e}"
+          q["error"] = f"Failed to measure {baseline}: {e}"
           continue
 
         analysis = {
@@ -74,13 +76,14 @@ def main() -> None:
             cost, runtime = measure(cur, q[method], SOURCE_SCHEMA)
           except Exception as e:
             print(f"[{qid}] Failed to measure {method}: {e}")
+            cost, runtime = float('inf'), float('inf')
             continue
 
           try:
             equivalence = rate_equivalence(cur, q[method], q[baseline], target_ddl)
           except Exception as e:
             print(f"[{qid}] Equivalence check failed for {method}, marking UNK: {e}")
-            equivalence = Equivalence.UNK
+            equivalence = Equivalence.INV
 
           analysis[method] = {
             "relative_cost": (cost / baseline_cost) if baseline_cost else None,
@@ -89,7 +92,7 @@ def main() -> None:
           }
 
         q["analysis"] = analysis
-        print(f"[{qid}] {analysis}")
+        print(f"[{qid}] JSON: \n{json.dumps(analysis, indent=2)}")
 
   with open(queries_path, "w") as f:
     json.dump(q_data, f, indent=2)

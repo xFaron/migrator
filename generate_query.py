@@ -7,6 +7,7 @@ import psycopg
 import sqlglot as exp
 from dotenv import load_dotenv
 from llm_tools import *
+from db_tools import strip_schema_qualifiers
 
 load_dotenv()
 
@@ -35,8 +36,8 @@ def build_prompt(template_path: str, db_schema: str, k: int) -> str:
   return template.replace("{DB_SCHEMA}", db_schema).replace("{K}", str(k))
 
 def extract_json(content: str) -> dict:
-  fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
-  raw = fenced.group(1) if fenced else content
+  fenced = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+  raw = fenced[-1] if fenced else content
   return json.loads(raw, strict=False)
 
 # Checks syntactic validity of the generated queries against the instantiated
@@ -58,6 +59,7 @@ def validate_generated_queries(queries: dict, generated_db: dict) -> dict:
           cur.execute(stmt)
 
         for q in queries["queries"]:
+          q["query"] = strip_schema_qualifiers(q["query"])
           try:
             stmt = exp.transpile(q["query"], read="postgres")[0]
             cur.execute(f"EXPLAIN {stmt}")

@@ -8,6 +8,9 @@ Requirements:
 - Queries must be syntactically valid PostgreSQL.
 - Return JSON only, with exactly K entries, each query as a single-line string:
 
+Note:
+- `DOUBLE` is not a valid PostgreSQL type. use `DOUBLE PRECISION` instead.
+
 {
   "queries": [
     {"id": 1, "query": "SELECT ..."},

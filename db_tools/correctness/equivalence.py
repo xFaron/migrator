@@ -99,7 +99,7 @@ def sqlsolver_logical_equivalence(query_list_a: List[str], query_list_b: List[st
       "-schema", sch_path,
       "-output", out_path,
     ]
-    subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)
+    subprocess.run(cmd, env=env, check=True, capture_output=True, text=True, timeout=60)
 
     with open(out_path) as f:
       verdicts = [line.strip() for line in f if line.strip()]
@@ -120,7 +120,10 @@ def rate_equivalence(curr, query_a: str, query_b: str, schema: List[str]) -> Equ
       raise AssertionError
 
     # Checking logical equivalence
-    curr_eqv = sqlsolver_logical_equivalence([query_a], [query_b], schema)[0]
+    try:
+      curr_eqv = sqlsolver_logical_equivalence([query_a], [query_b], schema)[0]
+    except subprocess.TimeoutExpired:
+      curr_eqv = Equivalence.UNK
     if curr_eqv == Equivalence.UNK:
       # Checking query result match equivalence
       if simple_equivalence(curr, query_a, query_b):
