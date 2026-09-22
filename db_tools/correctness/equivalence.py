@@ -104,7 +104,10 @@ def sqlsolver_logical_equivalence(query_list_a: List[str], query_list_b: List[st
     with open(out_path) as f:
       verdicts = [line.strip() for line in f if line.strip()]
 
-  return [Equivalence[v] if v in Equivalence.__members__ else Equivalence.UNK for v in verdicts]
+  results = [Equivalence[v] if v in Equivalence.__members__ else Equivalence.UNK for v in verdicts]
+  if len(results) == 0:
+    return [Equivalence.UNK]
+  return results
 
 
 # Input curr -> Should be able to run both queries properly (expecting schema to exist in curr)
@@ -122,7 +125,11 @@ def rate_equivalence(curr, query_a: str, query_b: str, schema: List[str]) -> Equ
     # Checking logical equivalence
     try:
       curr_eqv = sqlsolver_logical_equivalence([query_a], [query_b], schema)[0]
-    except subprocess.TimeoutExpired:
+    except Exception as e:
+      # sqlsolver crashing/timing out isn't a verdict on the queries
+      # themselves - fall back to a direct result comparison instead of
+      # letting the exception propagate and get mistaken for invalidity.
+      print(f"sqlsolver failed ({e}); falling back to simple_equivalence")
       curr_eqv = Equivalence.UNK
     if curr_eqv == Equivalence.UNK:
       # Checking query result match equivalence

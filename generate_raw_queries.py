@@ -15,14 +15,13 @@ load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
 SOURCE_SCHEMA = os.getenv("SOURCE_SCHEMA", "public")
 GENERATED_SCHEMA = os.getenv("GENERATED_SCHEMA", "query_migr_generated")
+# VIRTUAL_TABLES = False
 
 if not DB_URL:
   raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
 
-def extract_table_columns(schema_ddl: str) -> dict[str, list[str]]:
-  """Map target table name -> its column names in DDL order, by parsing the
-  target database's CREATE TABLE statements."""
+def extract_table_columns(schema_ddl: str) -> dict[str, list[tuple[str, str]]]:
   columns_by_table = {}
   for stmt in sqlglot.transpile(schema_ddl, read="postgres"):
     try:
@@ -33,9 +32,25 @@ def extract_table_columns(schema_ddl: str) -> dict[str, list[str]]:
       table_name = parsed.this.this.name
       schema = parsed.this
       columns_by_table[table_name] = [
-        col.this.name for col in schema.expressions if isinstance(col, exp.ColumnDef)
+        (col.this.name, col.args["kind"].sql(dialect="postgres"))
+        for col in schema.expressions if isinstance(col, exp.ColumnDef)
       ]
   return columns_by_table
+
+
+def cast_generation_query(query: str, columns: list[tuple[str, str]]) -> str:
+  select = sqlglot.parse_one(query, dialect="postgres")
+  if len(select.expressions) != len(columns):
+    return select.sql(dialect="postgres")
+
+  new_expressions = []
+  for proj, (col_name, col_type) in zip(select.expressions, columns):
+    inner = proj.this if isinstance(proj, exp.Alias) else proj
+    casted = exp.Cast(this=inner.copy(), to=exp.DataType.build(col_type, dialect="postgres"))
+    new_expressions.append(exp.alias_(casted, col_name))
+  select.set("expressions", new_expressions)
+
+  return select.sql(dialect="postgres")
 
 
 def split_statements(sql: str) -> list[str]:
@@ -52,7 +67,8 @@ def build_raw_query(query: str, generation_query_by_table: dict, columns_by_tabl
   }
 
   for i, table in enumerate(tables):
-    alias = f"{table}({', '.join(columns_by_table[table])})" if table in columns_by_table else table
+    column_names = [name for name, _ in columns_by_table[table]] if table in columns_by_table else []
+    alias = f"{table}({', '.join(column_names)})" if column_names else table
     expr = expr.with_(alias, as_=generation_query_by_table[table], append=(i != 0), dialect="postgres")
 
   if with_clause:
@@ -88,12 +104,18 @@ def main() -> None:
   with open(queries_path) as f:
     q_data = json.load(f)
 
-  # Map: target table name → SELECT that generates it from D'
+  columns_by_table = extract_table_columns(db_data["target_database_schema"])
+
+  # Map: target table name → SELECT that generates it from D', with each
+  # projected column cast to its target column's declared type (see
+  # cast_generation_query) so the raw query's values match what
+  # instantiate.py actually stored in D.
   generation_query_by_table = {
-    tg["target_table"]: sqlglot.transpile(tg["query"])[0]
+    tg["target_table"]: cast_generation_query(
+      sqlglot.transpile(tg["query"], read="postgres")[0], columns_by_table.get(tg["target_table"], [])
+    )
     for tg in db_data["table_generation_queries"]
   }
-  columns_by_table = extract_table_columns(db_data["target_database_schema"])
 
   # Instantiate D in a transaction that's rolled back at the end: this script
   # only needs D to exist long enough to verify each raw query against its
@@ -103,16 +125,21 @@ def main() -> None:
     conn.autocommit = False
     try:
       with conn.cursor() as cur:
-        cur.execute(f"DROP SCHEMA IF EXISTS {GENERATED_SCHEMA} CASCADE;")
-        cur.execute(f"CREATE SCHEMA {GENERATED_SCHEMA};")
         cur.execute(f"SET search_path TO {GENERATED_SCHEMA}, {SOURCE_SCHEMA};")
 
-        for stmt in split_statements(db_data["target_database_schema"]):
-          cur.execute(stmt)
-
-        print("Populating tables...")
-        for entry in tqdm(db_data["table_generation_queries"]):
-          cur.execute(f"INSERT INTO {entry['target_table']} {entry['query']}")
+        cur.execute(f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{GENERATED_SCHEMA}';")
+        present_tables = set(map(lambda x: x[0], cur.fetchall()));
+        required_tables = set(map(lambda x: x["target_table"], db_data["table_generation_queries"]))
+        if (len(required_tables - present_tables) != 0):
+          cur.execute(f"DROP SCHEMA IF EXISTS {GENERATED_SCHEMA} CASCADE;")
+          cur.execute(f"CREATE SCHEMA {GENERATED_SCHEMA};")
+  
+          for stmt in split_statements(db_data["target_database_schema"]):
+            cur.execute(stmt)
+  
+          print("Populating tables (temp)...")
+          for entry in tqdm(db_data["table_generation_queries"]):
+            cur.execute(f"INSERT INTO {entry['target_table']} {entry['query']}")
 
         # LLM-generated queries can be pathologically expensive; cap runtime so
         # one bad query can't hang this indefinitely (same policy as instantiate.py).

@@ -6,6 +6,7 @@ Runs the full generation pipeline for each given db number, sequentially.
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 
@@ -14,6 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 PYTHON = sys.executable
+delete_on_fail = True
 
 def default_k() -> int:
   return int(os.getenv("DEFAULT_K", "10"))
@@ -47,6 +49,10 @@ def run_db_pipeline(db_num: int, k: int, dry_run: bool) -> bool:
     if result.returncode != 0:
       print(f"{prefix}[FAILED] {os.path.basename(cmd[1])} exited with code "
             f"{result.returncode} - skipping remaining steps for this db.", file=sys.stderr)
+      if delete_on_fail:
+        db_dir = os.path.join("test_dbs", f"db{db_num}")
+        print(f"{prefix}deleting {db_dir} (delete_on_fail is set)", file=sys.stderr)
+        shutil.rmtree(db_dir, ignore_errors=True)
       return False
 
   print(f"{prefix}Pipeline complete.")

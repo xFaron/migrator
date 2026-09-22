@@ -3,6 +3,10 @@ import re
 import subprocess
 import sqlglot as exp
 import logging
+from tenacity import retry, stop_after_attempt, wait_exponential
+import time
+from collections import deque
+from functools import wraps
 
 logging.getLogger("sqlglot").setLevel(logging.ERROR)
 
@@ -41,11 +45,11 @@ def _clean_pg_dump_output(dump: str) -> list:
   new_sql_expr = []
   for expr in sql_expr:
     try:
-      expr = exp.parse_one(expr)
+      expr = exp.parse_one(expr, dialect="postgres")
       if isinstance(expr, exp.expressions.ddl.Alter):
-        new_sql_expr.append(expr.sql() + ";")
+        new_sql_expr.append(expr.sql(dialect="postgres") + ";")
       elif (isinstance(expr, exp.expressions.ddl.Create) and expr.kind == "TABLE"):
-        new_sql_expr.append(expr.sql() + ";")
+        new_sql_expr.append(expr.sql(dialect="postgres") + ";")
     except exp.errors.ParseError:
       continue
 
@@ -63,11 +67,11 @@ def strip_schema_qualifiers(query: str, dialect: str = "postgres") -> str:
 
 def extract_tables(query: str) -> list[str]:
   try:
-    parsed = sqlglot.parse_one(query, dialect="postgres")
-    cte_names = {cte.alias for cte in parsed.find_all(exp.CTE)}
+    parsed = exp.parse_one(query, dialect="postgres")
+    cte_names = {cte.alias for cte in parsed.find_all(exp.exp.CTE)}
     return list({
       node.name for node in parsed.walk()
-      if isinstance(node, exp.Table) and node.name and node.name not in cte_names
+      if isinstance(node, exp.exp.Table) and node.name and node.name not in cte_names
     })
   except Exception:
     return []
@@ -117,3 +121,56 @@ def run_query(conn_or_cur, query: str):
 def _run_query_from_cursor(cur, query: str):
   cur.execute(query)
   return cur.fetchall()
+
+
+# Cache drop methods
+def rate_limit(count: int, interval: float):
+  calls = deque()
+  buffer = 0.01
+
+  def decorator(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+      now = time.monotonic()
+      
+      while calls and now - calls[0] >= interval:
+        calls.popleft()
+
+      if len(calls) >= count:
+        wait = now - calls[0] + buffer
+        time.sleep(wait)
+
+        while calls and now - calls[0] >= interval:
+          calls.popleft()
+
+      calls.append(time.monotonic())
+      return func(*args, **kwargs)
+
+    return wrapper
+
+  return decorator
+      
+
+def clear_os_page_cache():
+  # Asks linux to drop page caches and inode caches. Requires root while running the eval script.
+  try:
+    with open("/proc/sys/vm/drop_caches", "w") as f:
+      f.write("3\n")
+  except OSError as e:
+    raise RuntimeError(f"Unable to clear os page cache: {e}")
+
+@retry(stop=stop_after_attempt(20), wait=wait_exponential(multiplier=1, min=2, max=30))
+@rate_limit(count=5, interval=10)
+def stop_db():
+  cmd = ["systemctl", "stop", "postgresql"]
+  result = subprocess.run(cmd, capture_output=True, text=True)
+  if (result.returncode != 0):
+    raise RuntimeError(f"Unable to stop postgres: {result.stdout}")
+
+@retry(stop=stop_after_attempt(20), wait=wait_exponential(multiplier=1, min=2, max=30))
+@rate_limit(count=5, interval=10)
+def start_db():
+  cmd = ["systemctl", "start", "postgresql"]
+  result = subprocess.run(cmd, capture_output=True, text=True)
+  if (result.returncode != 0):
+    raise RuntimeError(f"Unable to start postgres: {result.stdout}")

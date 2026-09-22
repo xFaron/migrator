@@ -39,6 +39,7 @@ GOOGLE_MODEL = os.getenv("GOOGLE_MODEL", "models/gemma-4-31b-it")
 GOOGLE_HEADERS = {
   "Content-Type": "application/json",
 }
+GOOGLE_REASONING = os.getenv("GOOGLE_REASONING", "minimal")
 
 DEFAULT_PROVIDER = "google"
 
@@ -48,7 +49,7 @@ DEFAULT_PROVIDER = "google"
   stop=stop_after_attempt(8),
   reraise=True,
 )
-def query_model(prompt: str, reasoning: bool = False, provider: str = DEFAULT_PROVIDER) -> dict:
+def query_model(prompt: str, reasoning: bool = True, provider: str = DEFAULT_PROVIDER) -> dict:
   if provider == "google":
     body = {
       "model": GOOGLE_MODEL,
@@ -58,7 +59,7 @@ def query_model(prompt: str, reasoning: bool = False, provider: str = DEFAULT_PR
         "temperature": 1,
         "max_output_tokens": 65536,
         "top_p": 0.95,
-        "thinking_level": "high" if reasoning else "minimal",
+        "thinking_level": GOOGLE_REASONING,
       },
     }
     resp = requests.post(
@@ -68,7 +69,8 @@ def query_model(prompt: str, reasoning: bool = False, provider: str = DEFAULT_PR
       timeout=120,
     )
     print("STATUS:", resp.status_code)
-    # print("RESPONSE:", resp.text)
+    if (resp.status_code != 200):
+      print("RESPONSE:", resp.text)
 
     resp.raise_for_status()
     try:
@@ -92,7 +94,8 @@ def query_model(prompt: str, reasoning: bool = False, provider: str = DEFAULT_PR
     resp = requests.post(OPENROUTER_API_URL, headers=OPENROUTER_HEADERS, json=body, timeout=120)
 
     print("STATUS:", resp.status_code)
-    print("RESPONSE:", resp.text)
+    if (resp.status_code != 200):
+      print("RESPONSE:", resp.text)
 
     resp.raise_for_status()
     
