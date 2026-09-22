@@ -1,4 +1,5 @@
 import json as _json
+import os
 import re
 import subprocess
 import sqlglot as exp
@@ -12,6 +13,35 @@ logging.getLogger("sqlglot").setLevel(logging.ERROR)
 
 O_LST = 1 # Output list
 O_STR = 0 # Output str
+
+# Variables renamed by the source/target naming refactor. A .env that still sets
+# one of these would otherwise silently fall back to the new variable's default
+# and point the pipeline at the wrong Postgres schema, so every entrypoint calls
+# check_env() after load_dotenv() to fail loudly instead.
+RENAMED_ENV_VARS = {
+  "SOURCE_SCHEMA": "TARGET_PG_SCHEMA",
+  "GENERATED_SCHEMA": "SOURCE_PG_SCHEMA",
+  "BASELINE1_PROMPT_PATH": "METHOD1_PROMPT_PATH",
+  "BASELINE2_PROMPT_PATH": "METHOD2_PROMPT_PATH",
+  "OPTIM_PROMPT_PATH": None,
+}
+
+
+def check_env() -> None:
+  problems = []
+  for old, new in RENAMED_ENV_VARS.items():
+    if os.getenv(old) is None:
+      continue
+    problems.append(
+      f"  {old} was removed; use {new} instead." if new
+      else f"  {old} was removed (the optim method no longer exists); delete it."
+    )
+  if problems:
+    raise RuntimeError(
+      "Your environment still uses pre-refactor variable names:\n"
+      + "\n".join(problems)
+      + "\nUpdate .env (see .env.example)."
+    )
 
 def fetch_schema_ddl(db_url: str, schema_name: str, tables: list[str] | None = None, flags: int = O_STR) -> str:
   cmd = [
@@ -174,3 +204,11 @@ def start_db():
   result = subprocess.run(cmd, capture_output=True, text=True)
   if (result.returncode != 0):
     raise RuntimeError(f"Unable to start postgres: {result.stdout}")
+
+  # `systemctl start` can return before the postmaster is actually accepting
+  # connections, so callers that connect right after this returns can race it.
+  for _ in range(30):
+    if subprocess.run(["pg_isready"], capture_output=True).returncode == 0:
+      return
+    time.sleep(1)
+  raise RuntimeError("postgres did not become ready to accept connections after start")

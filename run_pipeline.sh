@@ -17,7 +17,7 @@ DB_NUM_START="${1:-1}"
 K="${2:-10}"
 RUNS="${3:-1}"
 
-PYTHON="venv/bin/python"
+PYTHON="${PYTHON:-.venv/bin/python}"
 
 K_ARGS=()
 if [[ -n "$K" ]]; then
@@ -28,24 +28,24 @@ FAILED_RUNS=()
 
 run_iteration() {
   local db_num="$1"
-  local db_dir="test_dbs/db${db_num}"
-  local db_json="${db_dir}/db.json"
-  local queries_json="${db_dir}/queries.json"
 
-  echo "==> [1/5] generate_db.py --db ${db_num}"
+  echo "==> [1/6] generate_db.py --db ${db_num}"
   "$PYTHON" generate_db.py --db "$db_num"
 
-  echo "==> [2/5] generate_query.py --db ${db_num} ${K:+--k $K}"
+  echo "==> [2/6] generate_query.py --db ${db_num} ${K:+--k $K}"
   "$PYTHON" generate_query.py --db "$db_num" "${K_ARGS[@]}"
 
-  echo "==> [3/5] instantiate.py (pass 2: repopulate schema + filter zero-row queries)"
-  "$PYTHON" instantiate.py "$db_json" "$queries_json"
+  echo "==> [3/6] instantiate.py --db ${db_num} (repopulate schema + filter zero-row queries)"
+  "$PYTHON" instantiate.py --db "$db_num"
 
-  echo "==> [4/5] generate_raw_queries.py --db ${db_num}"
+  echo "==> [4/6] generate_raw_queries.py --db ${db_num}"
   "$PYTHON" generate_raw_queries.py --db "$db_num"
 
-  echo "==> [5/5] generate_optim_queries.py --db ${db_num}"
-  "$PYTHON" generate_optim_queries.py --db "$db_num"
+  echo "==> [5/6] generate_llm_queries.py --db ${db_num}"
+  "$PYTHON" generate_llm_queries.py --db "$db_num"
+
+  echo "==> [6/6] evaluate_queries.py --db ${db_num}"
+  "$PYTHON" evaluate_queries.py --db "$db_num"
 }
 
 for (( i=0; i<RUNS; i++ )); do

@@ -1,5 +1,12 @@
 # Query Migration Evaluation Results
 
+> **Pre-refactor record.** These results were produced before the source/target
+> naming refactor, with the method framework's predecessors: `baseline_1` here is
+> today's `method_1`, `baseline_2` is `method_2`, and `optim_query` has no successor
+> method (it was removed, not renumbered). The field names below (`baseline_1_query`,
+> `baseline_2_query`, `optim_query`, `analysis`) no longer exist in `queries.json`;
+> see `README.md` for the current shape. Kept verbatim as a record of that run.
+
 Correctness (equivalence rating vs. `raw_query`) and relative performance metrics per query, for test-case DBs that have completed `evaluate_queries.py`.
 
 Equivalence scale (weakest to strongest): `INV` < `NEQ` < `DB_EQ` < `EQ`.

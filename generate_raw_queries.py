@@ -1,5 +1,4 @@
 import argparse
-import json
 import os
 
 import psycopg
@@ -8,17 +7,18 @@ from dotenv import load_dotenv
 from sqlglot import exp
 from tqdm import tqdm
 
+from db_tools import check_env
 from db_tools.correctness import simple_equivalence
 
+import query_store
+
 load_dotenv()
+check_env()
 
 DB_URL = os.getenv("DATABASE_URL")
-SOURCE_SCHEMA = os.getenv("SOURCE_SCHEMA", "public")
-GENERATED_SCHEMA = os.getenv("GENERATED_SCHEMA", "query_migr_generated")
+TARGET_PG_SCHEMA = os.getenv("TARGET_PG_SCHEMA", "public")
+SOURCE_PG_SCHEMA = os.getenv("SOURCE_PG_SCHEMA", "query_migr_generated")
 # VIRTUAL_TABLES = False
-
-if not DB_URL:
-  raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
 
 def extract_table_columns(schema_ddl: str) -> dict[str, list[tuple[str, str]]]:
@@ -88,31 +88,22 @@ def main() -> None:
   parser.add_argument("--db", type=int, default=1, metavar="N")
   args = parser.parse_args()
 
-  db_dir = os.path.join("test_dbs", f"db{args.db}")
-  db_path = os.path.join(db_dir, "db.json")
-  queries_path = os.path.join(db_dir, "queries.json")
+  if not DB_URL:
+    raise SystemExit("Missing required environment variable: DATABASE_URL")
 
-  for path in (db_path, queries_path):
-    if not os.path.exists(path):
-      raise FileNotFoundError(
-        f"Could not find {path!r}. "
-        "Run generate_db.py and generate_query.py first."
-      )
+  hint = "Run generate_db.py and generate_query.py first."
+  db_data = query_store.load_db(args.db, hint)
+  q_data = query_store.load_queries(args.db, hint)
 
-  with open(db_path) as f:
-    db_data = json.load(f)
-  with open(queries_path) as f:
-    q_data = json.load(f)
+  columns_by_table = extract_table_columns(db_data["source_schema"])
 
-  columns_by_table = extract_table_columns(db_data["target_database_schema"])
-
-  # Map: target table name → SELECT that generates it from D', with each
-  # projected column cast to its target column's declared type (see
+  # Map: source table name → SELECT that generates it from D', with each
+  # projected column cast to its source column's declared type (see
   # cast_generation_query) so the raw query's values match what
   # instantiate.py actually stored in D.
   generation_query_by_table = {
-    tg["target_table"]: cast_generation_query(
-      sqlglot.transpile(tg["query"], read="postgres")[0], columns_by_table.get(tg["target_table"], [])
+    tg["source_table"]: cast_generation_query(
+      sqlglot.transpile(tg["query"], read="postgres")[0], columns_by_table.get(tg["source_table"], [])
     )
     for tg in db_data["table_generation_queries"]
   }
@@ -120,26 +111,26 @@ def main() -> None:
   # Instantiate D in a transaction that's rolled back at the end: this script
   # only needs D to exist long enough to verify each raw query against its
   # source, and must not disturb (or depend on) a separately instantiated
-  # GENERATED_SCHEMA.
+  # SOURCE_PG_SCHEMA.
   with psycopg.connect(DB_URL) as conn:
     conn.autocommit = False
     try:
       with conn.cursor() as cur:
-        cur.execute(f"SET search_path TO {GENERATED_SCHEMA}, {SOURCE_SCHEMA};")
+        cur.execute(f"SET search_path TO {SOURCE_PG_SCHEMA}, {TARGET_PG_SCHEMA};")
 
-        cur.execute(f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{GENERATED_SCHEMA}';")
+        cur.execute(f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{SOURCE_PG_SCHEMA}';")
         present_tables = set(map(lambda x: x[0], cur.fetchall()));
-        required_tables = set(map(lambda x: x["target_table"], db_data["table_generation_queries"]))
+        required_tables = set(map(lambda x: x["source_table"], db_data["table_generation_queries"]))
         if (len(required_tables - present_tables) != 0):
-          cur.execute(f"DROP SCHEMA IF EXISTS {GENERATED_SCHEMA} CASCADE;")
-          cur.execute(f"CREATE SCHEMA {GENERATED_SCHEMA};")
+          cur.execute(f"DROP SCHEMA IF EXISTS {SOURCE_PG_SCHEMA} CASCADE;")
+          cur.execute(f"CREATE SCHEMA {SOURCE_PG_SCHEMA};")
   
-          for stmt in split_statements(db_data["target_database_schema"]):
+          for stmt in split_statements(db_data["source_schema"]):
             cur.execute(stmt)
   
           print("Populating tables (temp)...")
           for entry in tqdm(db_data["table_generation_queries"]):
-            cur.execute(f"INSERT INTO {entry['target_table']} {entry['query']}")
+            cur.execute(f"INSERT INTO {entry['source_table']} {entry['query']}")
 
         # LLM-generated queries can be pathologically expensive; cap runtime so
         # one bad query can't hang this indefinitely (same policy as instantiate.py).
@@ -172,8 +163,7 @@ def main() -> None:
     finally:
       conn.rollback()
 
-  with open(queries_path, "w") as f:
-    json.dump(q_data, f, indent=2)
+  query_store.save_queries(args.db, q_data)
 
   print("Done.")
 

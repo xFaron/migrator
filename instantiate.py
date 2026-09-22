@@ -1,4 +1,4 @@
-import json
+import argparse
 import os
 import sys
 
@@ -6,40 +6,47 @@ import psycopg
 from tqdm import tqdm
 from dotenv import load_dotenv
 
-if len(sys.argv) != 3:
-  sys.exit("Usage: python3 instantiate.py <db.json> <queries.json>")
+import query_store
+from db_tools import check_env
 
 load_dotenv()
+check_env()
 
 DB_URL = os.getenv("DATABASE_URL")
-SCHEMA_NAME = os.getenv("GENERATED_SCHEMA", "query_migr_generated")
-GENERATED_DB_PATH = sys.argv[1]
-QUERIES_PATH = sys.argv[2]
+SOURCE_PG_SCHEMA = os.getenv("SOURCE_PG_SCHEMA", "query_migr_generated")
+TARGET_PG_SCHEMA = os.getenv("TARGET_PG_SCHEMA", "public")
 
-if not DB_URL:
-  raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
 def split_statements(sql: str) -> list[str]:
   return [s.strip() for s in sql.split(";") if s.strip()]
 
 def main() -> None:
-  generated_db = json.load(open(GENERATED_DB_PATH))
-  queries = json.load(open(QUERIES_PATH))
+  parser = argparse.ArgumentParser(
+    description="Instantiate D in SOURCE_PG_SCHEMA and drop queries that return no rows."
+  )
+  parser.add_argument("--db", type=int, default=1, metavar="N")
+  args = parser.parse_args()
+
+  if not DB_URL:
+    raise SystemExit("Missing required environment variable: DATABASE_URL")
+
+  db_data = query_store.load_db(args.db)
+  queries = query_store.load_queries(args.db)
 
   with psycopg.connect(DB_URL) as conn:
     conn.autocommit = False
     try:
       with conn.cursor() as cur:
-        cur.execute(f"DROP SCHEMA IF EXISTS {SCHEMA_NAME} CASCADE;")
-        cur.execute(f"CREATE SCHEMA {SCHEMA_NAME};")
-        cur.execute(f"SET search_path TO {SCHEMA_NAME}, public;")
+        cur.execute(f"DROP SCHEMA IF EXISTS {SOURCE_PG_SCHEMA} CASCADE;")
+        cur.execute(f"CREATE SCHEMA {SOURCE_PG_SCHEMA};")
+        cur.execute(f"SET search_path TO {SOURCE_PG_SCHEMA}, {TARGET_PG_SCHEMA};")
 
-        for stmt in split_statements(generated_db["target_database_schema"]):
+        for stmt in split_statements(db_data["source_schema"]):
           cur.execute(stmt)
 
         print("Populating tables...")
-        for entry in tqdm(generated_db["table_generation_queries"]):
-          cur.execute(f"INSERT INTO {entry['target_table']} {entry['query']}")
+        for entry in tqdm(db_data["table_generation_queries"]):
+          cur.execute(f"INSERT INTO {entry['source_table']} {entry['query']}")
         print("Populated all tables... Verifying queries")
 
         # LLM-generated queries can be pathologically expensive (e.g. uncorrelated
@@ -80,8 +87,7 @@ def main() -> None:
       sys.exit(1)
 
   queries["queries"] = kept
-  with open(QUERIES_PATH, "w") as f:
-    json.dump(queries, f, indent=2)
+  query_store.save_queries(args.db, queries)
   print(f"Kept {len(kept)}/{total} queries.")
 
 

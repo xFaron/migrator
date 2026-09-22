@@ -57,7 +57,6 @@ def query_model(prompt: str, reasoning: bool = True, provider: str = DEFAULT_PRO
       "tools": [],
       "generation_config": {
         "temperature": 1,
-        "max_output_tokens": 65536,
         "top_p": 0.95,
         "thinking_level": GOOGLE_REASONING,
       },
@@ -66,7 +65,7 @@ def query_model(prompt: str, reasoning: bool = True, provider: str = DEFAULT_PRO
       f"{GOOGLE_API_URL}?key={GOOGLE_API_KEY}",
       headers=GOOGLE_HEADERS,
       json=body,
-      timeout=120,
+      timeout=600,
     )
     print("STATUS:", resp.status_code)
     if (resp.status_code != 200):

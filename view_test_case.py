@@ -60,7 +60,7 @@ def format_sql(s: str) -> str:
         return s.strip()
 
 
-# Cosmetic labels/order/colors for the "analysis" table - display only, the
+# Cosmetic labels/order/colors for the measurements table - display only, the
 # underlying values are shown exactly as stored, just laid out as a table
 # (method x metric) instead of a nested key/value dump.
 _METRIC_ORDER = [
@@ -87,16 +87,32 @@ _EQUIVALENCE_COLORS = {
     "UNK": "#6e7781",
 }
 
-def render_analysis(analysis: dict):
-    rows = {method: metrics for method, metrics in analysis.items() if isinstance(metrics, dict)}
-    if not rows:
-        render_value(analysis)
-        return
+# The query's own two measurements are stored prefixed, so `query` (Qsrc, run on D)
+# and `raw_query` (Qgt, run on D') stay tellable apart; method entries are already
+# scoped by their method_id and keep the bare metric names.
+_QUERY_METRIC_PREFIXES = {"source_query": "query", "raw_query": "raw_query"}
 
+
+def metric_rows(query: dict) -> dict:
+    """One row per measured thing: the source query, the ground-truth rewrite it was
+    migrated into (the baseline), then every `method_gen` entry."""
+    rows = {}
+    for prefix, label in _QUERY_METRIC_PREFIXES.items():
+        metrics = {k: query[f"{prefix}_{k}"] for k in _METRIC_ORDER if f"{prefix}_{k}" in query}
+        if metrics:
+            rows[label] = metrics
+    for entry in query.get("method_gen", []):
+        metrics = {k: entry[k] for k in _METRIC_ORDER if k in entry}
+        if metrics:
+            rows[entry.get("method_id", "?")] = metrics
+    return rows
+
+
+def render_metrics(rows: dict):
     df = pd.DataFrame(rows).T
     cols = [c for c in _METRIC_ORDER if c in df.columns] + [c for c in df.columns if c not in _METRIC_ORDER]
     df = df[cols].rename(columns=_METRIC_LABELS)
-    df.index.name = "method"
+    df.index.name = "query / method"  # the first rows are the query itself, not methods
 
     fmt = {}
     for col in df.columns:
@@ -113,12 +129,35 @@ def render_analysis(analysis: dict):
         )
     st.dataframe(styler, use_container_width=True)
 
-    # Any per-method entries that failed before producing metrics (e.g. an
-    # "error" string instead of a metrics dict) are shown below, unprocessed.
-    for method, metrics in analysis.items():
-        if not isinstance(metrics, dict):
-            st.caption(method)
-            render_value(metrics)
+
+def render_method_gen(entries: list):
+    """The generated SQL per method, below the metrics table. An entry that only
+    holds an `error` (generation or measurement failed) is shown as that text."""
+    for entry in entries:
+        if not isinstance(entry, dict):
+            render_value(entry)
+            continue
+        st.caption(entry.get("method_id", "?"))
+        for k in ("query", "error"):
+            if k in entry:
+                render_value(entry[k])
+
+
+def render_dict_item(item: dict):
+    """One entry of a list of records - a query, or a table generation query."""
+    rows = metric_rows(item)
+    if rows:
+        st.caption("measurements")
+        render_metrics(rows)
+
+    for k, v in item.items():
+        if rows and k in _METRIC_ORDER:
+            continue  # already in the table above
+        if k == "method_gen" and isinstance(v, list):
+            render_method_gen(v)
+            continue
+        st.caption(k)
+        render_value(v)
 
 
 def render_value(value):
@@ -132,25 +171,19 @@ def render_value(value):
         for item in value:
             if isinstance(item, dict):
                 label = (
-                    item.get("target_table")
+                    item.get("source_table")
+                    # the top-level `methods` registry has neither a table nor an id
+                    or item.get("method_id")
                     or f"Query #{item.get('id', '?')}"
                 )
                 with st.expander(label, expanded=False):
-                    for k, v in item.items():
-                        st.caption(k)
-                        if k == "analysis" and isinstance(v, dict):
-                            render_analysis(v)
-                        else:
-                            render_value(v)
+                    render_dict_item(item)
             else:
                 render_value(item)
     elif isinstance(value, dict):
         for k, v in value.items():
             st.markdown(f"**{k}**")
-            if k == "analysis" and isinstance(v, dict):
-                render_analysis(v)
-            else:
-                render_value(v)
+            render_value(v)
     else:
         st.write(value)
 

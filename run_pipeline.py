@@ -12,7 +12,10 @@ import sys
 
 from dotenv import load_dotenv
 
+from db_tools import check_env
+
 load_dotenv()
+check_env()
 
 PYTHON = sys.executable
 delete_on_fail = True
@@ -21,18 +24,16 @@ def default_k() -> int:
   return int(os.getenv("DEFAULT_K", "10"))
 
 def pipeline_steps(db_num: int, k: int) -> list[list[str]]:
-  db_dir = os.path.join("test_dbs", f"db{db_num}")
-  db_json = os.path.join(db_dir, "db.json")
-  queries_json = os.path.join(db_dir, "queries.json")
-
   return [
-    [PYTHON, "generate_db.py", "--db", str(db_num)],
-    [PYTHON, "generate_query.py", "--db", str(db_num), "--k", str(k)],
-    [PYTHON, "instantiate.py", f"test_dbs/db{db_num}/db.json", f"test_dbs/db{db_num}/queries.json"],
+    # [PYTHON, "generate_db.py", "--db", str(db_num)],
+    # [PYTHON, "generate_query.py", "--db", str(db_num), "--k", str(k)],
+    [PYTHON, "instantiate.py", "--db", str(db_num)],
     [PYTHON, "generate_raw_queries.py", "--db", str(db_num)],
-    [PYTHON, "generate_baselines.py", "--db", str(db_num)],
-    [PYTHON, "generate_optim_queries.py", "--db", str(db_num)],
-    [PYTHON, "evaluate_queries.py", "--db", str(db_num)],
+    # Runs every method in the registry. Methods 3-5 ship as bare prompt stubs, so
+    # until those are written they cost one LLM call per query and record a parse
+    # error; pass --method 1 --method 2 here to skip them in the meantime.
+    [PYTHON, "generate_llm_queries.py", "--db", str(db_num)],
+    # [PYTHON, "evaluate_queries.py", "--db", str(db_num)],
   ]
 
 

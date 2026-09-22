@@ -3,9 +3,11 @@ import os
 import psycopg
 from dotenv import load_dotenv
 
+from db_tools import check_env
 from db_tools.correctness.equivalence import sqlsolver_logical_equivalence
 
 load_dotenv()
+check_env()
 
 DB_URL = os.getenv("DATABASE_URL")
 if not DB_URL:

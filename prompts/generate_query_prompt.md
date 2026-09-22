@@ -20,7 +20,7 @@ Note:
 
 Schema:
 ```sql
-{DB_SCHEMA}
+{SSRC}
 ````
 
 K = {K}
